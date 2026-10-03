@@ -5,7 +5,7 @@
 <h1 align="center">星迹 · StarTrail</h1>
 <p align="center">发现开源项目，读懂它能做什么，把值得关注的项目留在本机。</p>
 <p align="center">
-  <a href="https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.2">下载 Windows 预览版</a> ·
+  <a href="https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.1">下载 Windows 预览版</a> ·
   <a href="docs/USER_GUIDE.md">用户手册</a> ·
   <a href="docs/DEVELOPMENT.md">开发指南</a> ·
   <a href="https://github.com/AetheriusLumina/StarTrail/issues">反馈问题</a>
@@ -41,7 +41,7 @@ StarTrail is a Windows-first, local reader for public GitHub projects: verified 
 
 普通用户不需要安装 Python、Node.js 或开发工具。
 
-1. 打开 [Windows 下载页](https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.2)，下载 **StarTrail_Setup.exe**；同页还有用户手册和 SHA256 校验文件。
+1. 打开 [Windows 下载页](https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.1)，下载 **StarTrail_Setup.exe**；同页还有用户手册和 SHA256 校验文件。
 2. 安装后通过快捷方式启动，界面会在默认浏览器打开。
 3. 点击左侧「立即更新」获取项目；添加感兴趣的关键词，在上方分类栏切换 Star 增长与关键词结果。
 4. 点击项目阅读详情，点击「关注」收藏；在「历史」和「我的关注」中回看、搜索和整理。
@@ -51,7 +51,7 @@ StarTrail is a Windows-first, local reader for public GitHub projects: verified 
 
 ## 界面预览
 
-以下四张图由维护者提供并授权公开，来自软件的实际使用界面，保留原始画面。部分截图仍显示旧名称 **GitHub Radar**；产品现已更名为 **星迹 · StarTrail**，这些功能继续保留。排名、Star 数、日期和项目理解代表截图时保存的结果，**不是实时榜单或原仓库保证**。截图仅用于介绍功能，不包含登录凭证或电脑文件路径。点击图片可查看大图。
+以下四张图由维护者提供并授权公开，来自有历史记录的软件实际使用界面。按维护者要求，首图通过 AI 图像编辑更新左上角名称和图标为 **StarTrail**，用于品牌展示；其他三张保留原图。产品从 **GitHub Radar** 更名为 **星迹 · StarTrail**，这些功能继续保留。排名、Star 数、日期和项目理解代表截图时保存的结果，**不是实时榜单或原仓库保证**。截图仅用于介绍功能，不包含登录凭证或电脑文件路径。点击图片可查看大图。
 
 ### 首页：增长与关键词分类
 
@@ -238,7 +238,7 @@ py -3.13 -m venv .venv
 
 ## 测试构建与发布
 
-自动测试使用合成数据和临时目录，不需要私人凭证，也不会付费调用 AI。当前发布代码有 **481 项自动测试**，其中包含通过 Node.js 执行的界面交互检查。
+自动测试使用合成数据和临时目录，不需要私人凭证，也不会付费调用 AI。当前主分支有 **481 项自动测试**，其中包含通过 Node.js 执行的界面交互检查。
 
 ```powershell
 $env:RADAR_TEST_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path
