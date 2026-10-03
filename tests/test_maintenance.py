@@ -34,7 +34,7 @@ class MaintenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='Radar 维护 ')
         self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name)/'中文 安装'
+        self.root=(Path(self.temp.name)/'中文 安装').resolve()
         (self.root/'AppFiles').mkdir(parents=True)
         self.data=self.root/'UserData'
 

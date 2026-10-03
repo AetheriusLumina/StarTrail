@@ -2,7 +2,7 @@ import tempfile
 import sys
 import unittest
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,9 +13,20 @@ from github_radar.update_lock import update_lock
 
 
 class CliTests(unittest.TestCase):
+    def test_failure_message_does_not_crash_english_windows_console(self):
+        from github_radar.windows_scheduler import SchedulerError
+        buffer = BytesIO()
+        console = TextIOWrapper(buffer, encoding='cp1252')
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(console), patch(
+                'github_radar.__main__._scheduler_for', side_effect=SchedulerError('注册失败')):
+            result = main(['--data-dir', directory, '--sync-scheduler'])
+        console.flush()
+        self.assertEqual(result, 1)
+        self.assertTrue(buffer.getvalue(), 'Error feedback disappeared')
+
     def test_installer_can_restore_daily_task_without_opening_browser(self):
         with tempfile.TemporaryDirectory() as temp:
-            install_root = Path(temp) / "GitHub Radar"
+            install_root = (Path(temp) / "GitHub Radar").resolve()
             data = install_root / "UserData"
             store = RadarStore(data)
             store.save_auto_update_settings(True, "09:00")

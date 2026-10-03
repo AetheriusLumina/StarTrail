@@ -27,7 +27,7 @@ class UninstallTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="雷达 卸载 ")
         self.addCleanup(self.temporary.cleanup)
-        self.install = Path(self.temporary.name) / "GitHub Radar"
+        self.install = (Path(self.temporary.name) / "GitHub Radar").resolve()
         self.install.mkdir()
         self.data = self.install / "UserData"
         self.store = RadarStore(self.data)

@@ -10,6 +10,18 @@ from pathlib import Path
 from .install_paths import default_data_dir, install_dir as installation_dir
 
 
+
+def _print_message(message):
+    """Feedback must not turn a handled error into a locale encoding crash."""
+    if sys.stdout is None:
+        return
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, 'encoding', None) or 'ascii'
+        print(str(message).encode(encoding, errors='backslashreplace').decode(encoding))
+
+
 def _scheduler_for(store: RadarStore):
     from .windows_scheduler import SchedulerController
 
@@ -76,7 +88,7 @@ def _main(
                     message, encoding="utf-8")
             except OSError:
                 pass
-            print(message)
+            _print_message(message)
             return 1
         (args.data_dir / "uninstall-error.txt").unlink(missing_ok=True)
         return 0
@@ -91,13 +103,13 @@ def _main(
             _scheduler_for(store).sync(settings.enabled, settings.time)
         except SchedulerError as exc:
             record_error(store.data_dir, "task-scheduler", str(exc))
-            print(f"每日更新任务未能注册：{exc}")
+            _print_message(f"每日更新任务未能注册：{exc}")
             return 1
         return 0
 
     if args.add_keyword is not None:
         rule = store.add_keyword(args.add_keyword)
-        print(f"已关注：{rule.term}（最低 {rule.min_stars} Star）")
+        _print_message(f"已关注：{rule.term}（最低 {rule.min_stars} Star）")
         return 0
 
     from .github_account import GitHubAccount
@@ -141,18 +153,18 @@ def _main(
                 observed_at or now.isoformat(timespec="seconds"),
             )
     except UpdateBusyError:
-        print("已有更新或 AI 任务正在运行，请稍后再试")
+        _print_message("已有更新或 AI 任务正在运行，请稍后再试")
         return 1
-    print(result.message)
+    _print_message(result.message)
     if result.updated_at:
-        print(f"数据时间：{result.updated_at}")
+        _print_message(f"数据时间：{result.updated_at}")
     if result.stale:
-        print("当前显示上次保存的结果")
+        _print_message("当前显示上次保存的结果")
     for note in result.notes:
-        print(note)
+        _print_message(note)
     if result.growth_coverage is not None:
         coverage = result.growth_coverage
-        print(f"增长候选：发现 {coverage.candidate_count}，成功核算 {coverage.scored_count}；"
+        _print_message(f"增长候选：发现 {coverage.candidate_count}，成功核算 {coverage.scored_count}；"
               f"口径 {coverage.metric_basis}；统计日 {coverage.stat_date or '暂无'}；"
               f"来源 {', '.join(coverage.source_names) or '暂无'}")
     for item in result.recommendations:
@@ -162,7 +174,7 @@ def _main(
         words = card_text(item, repo, {})
         growth = f"  {words.growth}" if words.growth else ""
         observation = f"  {words.observation}" if words.observation else ""
-        print(f"[{item.section}] {repo.full_name}  Star {repo.stars}{growth}{observation}")
+        _print_message(f"[{item.section}] {repo.full_name}  Star {repo.stars}{growth}{observation}")
     if result.status == 'ok':
         from .project_translation import warm_selected
         warm_selected(store, service.client)
@@ -184,7 +196,7 @@ def main(argv=None, *, client=None, local_date=None, observed_at=None, launcher=
             return _main(arguments,**options)
     except MaintenanceBusyError as exc:
         message=str(exc)
-        print(message)
+        _print_message(message)
         headless=any(arg.startswith(('--scheduled-refresh','--refresh','--sync-scheduler',
                                      '--add-keyword','--help','-h')) for arg in arguments)
         if not headless:

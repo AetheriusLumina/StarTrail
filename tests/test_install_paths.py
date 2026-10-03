@@ -38,7 +38,7 @@ class InstallPathTests(unittest.TestCase):
                 result = radar_main([], launcher=lambda _service, store: seen.append(
                     store.data_dir) or 0)
             self.assertEqual(result, 0)
-            self.assertEqual(seen, [Path(temporary) / "UserData"])
+            self.assertEqual(seen, [Path(temporary).resolve() / "UserData"])
 
     def test_frozen_scheduled_mode_uses_same_data_directory(self):
         with tempfile.TemporaryDirectory(prefix="雷达 安装 ") as temporary:
@@ -54,7 +54,7 @@ class InstallPathTests(unittest.TestCase):
                     "github_radar.browser_launcher.handoff_scheduled_refresh", handoff):
                 result = radar_main(["--scheduled-refresh"], client=object())
             self.assertEqual(result, 0)
-            self.assertEqual(seen, [Path(temporary) / "UserData"])
+            self.assertEqual(seen, [Path(temporary).resolve() / "UserData"])
 
     def test_entrypoint_runs_existing_app_when_named_github_radar(self):
         script = Path(__file__).resolve().parents[1] / "packaging" / "entrypoint.py"
