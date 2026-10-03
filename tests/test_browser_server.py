@@ -767,6 +767,9 @@ class BrowserServerTests(unittest.TestCase):
         self.assertEqual(self.post("/api/scheduled-refresh", token=False)[0], 403)
         self.assertEqual(self.post("/api/scheduled-refresh")[0], 202)
         self.wait_until(lambda: self.store.auto_attempts(now.date().isoformat()).status == "success")
+        # A committed result precedes worker cleanup; the next request must wait for both.
+        self.server._worker.join(3)
+        self.assertFalse(self.server._worker.is_alive())
         self.assertEqual(self.post("/api/scheduled-refresh")[0], 200)
         self.assertEqual(calls, [now.date().isoformat()])
 

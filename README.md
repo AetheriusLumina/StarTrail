@@ -5,7 +5,7 @@
 <h1 align="center">星迹 · StarTrail</h1>
 <p align="center">发现开源项目，读懂它能做什么，把值得关注的项目留在本机。</p>
 <p align="center">
-  <a href="https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.1">下载 Windows 预览版</a> ·
+  <a href="https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.2">下载 Windows 预览版</a> ·
   <a href="docs/USER_GUIDE.md">用户手册</a> ·
   <a href="docs/DEVELOPMENT.md">开发指南</a> ·
   <a href="https://github.com/AetheriusLumina/StarTrail/issues">反馈问题</a>
@@ -41,7 +41,7 @@ StarTrail is a Windows-first, local reader for public GitHub projects: verified 
 
 普通用户不需要安装 Python、Node.js 或开发工具。
 
-1. 打开 [Windows 下载页](https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.1)，下载 **StarTrail_Setup.exe**；同页还有用户手册和 SHA256 校验文件。
+1. 打开 [Windows 下载页](https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.4.0-preview.2)，下载 **StarTrail_Setup.exe**；同页还有用户手册和 SHA256 校验文件。
 2. 安装后通过快捷方式启动，界面会在默认浏览器打开。
 3. 点击左侧「立即更新」获取项目；添加感兴趣的关键词，在上方分类栏切换 Star 增长与关键词结果。
 4. 点击项目阅读详情，点击「关注」收藏；在「历史」和「我的关注」中回看、搜索和整理。
@@ -51,31 +51,31 @@ StarTrail is a Windows-first, local reader for public GitHub projects: verified 
 
 ## 界面预览
 
-以下为 **StarTrail 实际运行界面**，在独立演示环境中截图。项目数量、Star 数、增长和日期均为演示数据，**不代表实时排名**；详情六卡使用人工准备的演示说明来展示布局，没有调用 AI，也不代表真实 AI 分析结论。截图没有读取维护者的个人数据库或登录信息。点击图片可查看大图。
+以下四张图由维护者提供并授权公开，来自软件的实际使用界面，保留原始画面。部分截图仍显示旧名称 **GitHub Radar**；产品现已更名为 **星迹 · StarTrail**，这些功能继续保留。排名、Star 数、日期和项目理解代表截图时保存的结果，**不是实时榜单或原仓库保证**。截图仅用于介绍功能，不包含登录凭证或电脑文件路径。点击图片可查看大图。
 
 ### 首页：增长与关键词分类
 
-关键词添加位于右上方，分类栏在项目列表上方。切换分类读取已保存结果，右侧竖三点可展开全部关键词。
+关键词添加位于右上方，分类栏在项目列表上方。切换分类读取已保存结果，右侧竖三点可展开全部关键词。图中前五的历史项目保留原排名并用小卡展示；下方继续列出「五个新发现」，重复历史项目不占新增名额。
 
-![首页增长榜与关键词分类](docs/images/home.jpg)
+![首页增长榜与关键词分类](docs/images/home.png)
 
 ### 项目详情：六项关键信息
 
-标题与排名、操作按钮、Star 数据和简介紧凑排列；六卡为三列两行，内容过长时在卡内滚动。原用途取自仓库 README，其余信息可手动生成并缓存。
+标题与排名、操作按钮、Star 数据和简介紧凑排列；六卡为三列两行，内容过长时在卡内滚动。原用途取自仓库 README，其余信息可手动生成并缓存。图中的「核心功能」展示了卡内滚动条：长内容不把六个卡片撑成不同高度；专业项目也能按用途、场景和门槛逐项阅读。
 
-![项目详情六卡布局](docs/images/detail.jpg)
+![项目详情六卡布局](docs/images/detail.png)
 
 ### 历史：按日期回看与组合搜索
 
-日历按月份显示已有记录。点击日期进入独立的当天项目页；名称、日期范围和来源支持组合搜索。
+日历按月份显示已有记录，每一天可看到保存的项目数。选择年份和月份或切换相邻月份，点击有记录的日期进入独立当天页；上方名称、日期范围和来源支持组合搜索，搜索时日历不可交互。
 
-![历史日历与搜索](docs/images/calendar.jpg)
+![历史日历与搜索](docs/images/calendar.png)
 
 ### 我的关注：紧凑卡片与文件夹
 
-关注项目按五列显示；自建文件夹提供竖三点菜单，可以重命名、删除和拖动排序。
+关注项目按五列显示，超过五个自动另起一行。图中「全部关注」「未分类」与自建文件夹同行，按钮显示项目数；竖三点提供重命名、删除，文件夹可拖动排序。名称或简介搜索帮助快速找到收藏；删除文件夹保留关注项目。
 
-![我的关注与文件夹](docs/images/following.jpg)
+![我的关注与文件夹](docs/images/following.png)
 
 ## 功能详解
 
@@ -238,7 +238,7 @@ py -3.13 -m venv .venv
 
 ## 测试构建与发布
 
-自动测试使用合成数据和临时目录，不需要私人凭证，也不会付费调用 AI。当前发布代码有 **480 项自动测试**，其中包含通过 Node.js 执行的界面交互检查。
+自动测试使用合成数据和临时目录，不需要私人凭证，也不会付费调用 AI。当前发布代码有 **481 项自动测试**，其中包含通过 Node.js 执行的界面交互检查。
 
 ```powershell
 $env:RADAR_TEST_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path
