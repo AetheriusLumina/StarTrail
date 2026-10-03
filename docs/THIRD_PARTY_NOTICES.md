@@ -5,7 +5,7 @@ MIT 适用于 StarTrail 自有代码和文档。以下资源与运行库保留�
 | 资源 | 来源与授权 |
 |---|---|
 | 原创猫形星光图标 | StarTrail 项目生成并采用，随项目按 MIT 提供；不是 Octocat 官方商标。 |
-| 山林背景 `forest-mist.png` | 维护者已确认拥有或取得公开分发授权，允许随本项目分发；不单独声明第三方图像为 MIT。 |
+| 山林背景 `forest-mist.png` | 已拥有或取得公开分发授权，允许随本项目分发；不单独声明第三方图像为 MIT。 |
 | Cormorant Garamond / Noto Serif SC | Google Fonts，SIL OFL 1.1。字体目录包含原版权、完整 OFL 和来源/哈希清单。 |
 | 英中/中英离线模型 1.9 | [Argos 模型源](https://www.argosopentech.com/argospm/index/)，源下载地址与 SHA256 在模型清单；派生自 Jörg Tiedemann、Santhosh Thottingal 的 OPUS-MT 模型，模型 README 标注 CC BY 4.0。安装包保留两个 README 和模型元数据，另附 CC BY 4.0 条款与原作者署名，模型数值未修改。 |
 | CTranslate2 4.8.2 | [OpenNMT](https://github.com/OpenNMT/CTranslate2)，MIT；Windows wheel 的 Intel OpenMP/静态计算组件保留上游条款；CPU 安装包排除未使用的 cuDNN loader，不提供 GPU 模式。 |
@@ -21,4 +21,4 @@ MIT 适用于 StarTrail 自有代码和文档。以下资源与运行库保留�
 
 发布者升级依赖或更换模型时应重新核对授权与分发条款，不能只修改版本号。二进制发布还应完成干净 Windows、有效真实授权及代码签名的后续验证；源码开源不等于这些项目已经通过。
 
-`docs/images/` 的四张实际使用截图由维护者提供并明确授权公开，首图按维护者要求经 AI 图像编辑替换名称与产品图标，其他三张保持原图；图中数据仅代表当时保存结果，不是实时榜单或仓库作者保证。森林背景沿用上述公开分发授权；公开项目名称用于说明界面，不代表其作者赞助或认可 StarTrail。
+`docs/images/` 展示实际使用界面；首图通过 AI 图像编辑更新当前名称和图标，其他三张保留原图。图中数据仅代表当时保存结果，不是实时榜单或仓库作者保证。森林背景沿用上述公开分发授权；公开项目名称用于说明界面，不代表其作者赞助或认可 StarTrail。
