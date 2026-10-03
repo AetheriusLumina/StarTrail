@@ -35,5 +35,12 @@ class PublicPrivacyTests(unittest.TestCase):
         self.assertIn('personal-email', self.module.inspect_file('README.md', email.encode()))
 
 
+    def test_jpeg_screenshot_remains_subject_to_private_directory_gate(self):
+        jpeg = b'\xff\xd8\xff\xe0screenshot'
+        self.assertEqual(self.module.inspect_file('docs/images/home.jpg', jpeg), [])
+        self.assertEqual(self.module.inspect_file('docs/images/home.jpeg', jpeg), [])
+        self.assertIn('private-or-generated-file', self.module.inspect_file('UserData/private.jpg', jpeg))
+
+
 if __name__ == '__main__':
     unittest.main()

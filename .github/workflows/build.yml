@@ -65,9 +65,12 @@ jobs:
           if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$') { throw 'INVALID_RELEASE_TAG' }
           gh release upload $env:RELEASE_TAG .build/StarTrail_Setup.exe .build/SHA256SUMS.txt docs/USER_GUIDE.md --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" | ConvertFrom-Json
+          # Draft releases are found through the authenticated list; the tag endpoint can return 404.
+          $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $installer = @($release.assets | Where-Object name -eq 'StarTrail_Setup.exe')
+          $release = @($pages | ForEach-Object { $_ } | Where-Object tag_name -eq $env:RELEASE_TAG)
+          if ($release.Count -ne 1) { throw 'RELEASE_NOT_FOUND' }
+          $installer = @($release[0].assets | Where-Object name -eq 'StarTrail_Setup.exe')
           $expected = (Get-FileHash .build/StarTrail_Setup.exe -Algorithm SHA256).Hash.ToLower()
           if ($installer.Count -ne 1 -or $installer[0].digest -ne "sha256:$expected") { throw 'RELEASE_DIGEST_MISMATCH' }
           gh release edit $env:RELEASE_TAG --draft=false --prerelease

@@ -23,7 +23,7 @@ def inspect_file(name: str, content: bytes) -> list[str]:
             or path.suffix.lower() in {'.db', '.sqlite', '.sqlite3', '.bin', '.log', '.exe',
                                       '.msi', '.pfx', '.pem', '.key', '.zip', '.argosmodel'}):
         findings.append('private-or-generated-file')
-    if path.suffix.lower() in {'.png', '.ico', '.ttf'}:
+    if path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.ico', '.ttf'}:
         return findings
     try:
         text = content.decode('utf-8-sig')
