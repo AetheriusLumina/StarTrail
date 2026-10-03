@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>StarTrail · 发现值得关注的开源项目</title>
+  <link rel="icon" type="image/png" href="/assets/startrail.png">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/i18n.js" defer></script>
+  <script src="/assets/translation.js" defer></script>
+  <script src="/assets/history_following.js" defer></script>
+  <script src="/assets/history_calendar.js" defer></script>
+  <script src="/assets/following_board.js" defer></script>
+  <script src="/assets/card_transition.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <div class="page-glow" aria-hidden="true"></div>
+  <a href="#home-view" id="skip-content" class="skip-content" data-i18n="跳到主要内容">跳到主要内容</a>
+  <div class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="StarTrail 导航">
+      <a class="brand" href="/" id="brand-link" aria-label="StarTrail 首页">
+        <span class="brand-mark" aria-hidden="true"><img src="/assets/startrail.png" alt="" width="32" height="32"></span>
+        <span>Star<strong>Trail</strong></span>
+      </a>
+    <nav id="primary-nav" class="primary-nav" aria-label="主要页面">
+      <a id="nav-home" data-i18n="首页" href="/">首页</a>
+      <a id="nav-history" data-i18n="历史" href="/history">历史</a>
+      <a id="nav-following" data-i18n="我的关注" href="/following">我的关注</a>
+      <a id="nav-settings" data-i18n="设置" href="/settings">设置</a>
+    </nav>
+      <div class="sidebar-operations">
+        <div class="translation-controls">
+          <button id="translation-original" class="button button-quiet" type="button" aria-pressed="false">查看原文</button>
+        <button id="translation-retry" class="button button-quiet" type="button" data-i18n="重试翻译" hidden>重试翻译</button>
+          <span id="translation-status" role="status" aria-live="polite">本地机器翻译</span>
+        </div>
+        <button id="refresh-button" data-i18n="立即更新" class="button button-primary" type="button">立即更新</button>
+        <p id="update-status" class="field-hint" role="status" aria-live="polite" data-translation-literal hidden></p>
+      </div>
+      <section id="detail-tools" class="detail-tools" aria-label="项目操作" hidden>
+          <div class="detail-ai-controls">
+            <button id="detail-ai-explain" class="button button-primary" type="button">生成项目理解</button>
+            <label for="detail-ai-model" data-i18n="AI 模型">AI 模型</label>
+            <select id="detail-ai-model" aria-describedby="detail-ai-usage"><option value="">自动选择</option></select>
+            <button id="detail-ai-connect" data-i18n="连接 Codex" class="button button-quiet" type="button">连接 Codex</button>
+          </div>
+          <p id="detail-ai-usage" data-i18n="点击后会把这个项目的公开 GitHub 资料发送给 Codex，并消耗账号使用额度。" class="field-hint">点击后会把这个项目的公开 GitHub 资料发送给 Codex，并消耗账号使用额度。</p>
+          <p id="detail-ai-status" class="ai-result-status" role="status" aria-live="polite"></p>
+          <p id="readme-status" role="status" aria-live="polite"></p>
+        <details id="detail-folders" class="detail-folder-tools" hidden>
+          <summary data-i18n="整理到文件夹">整理到文件夹</summary>
+          <p class="field-hint" data-i18n="可同时选择多个文件夹；全部取消则保留在未分类。">可同时选择多个文件夹；全部取消则保留在未分类。</p>
+          <form id="detail-folder-form"><div id="detail-folder-choices" class="folder-choices"></div><button id="detail-folder-save" class="button button-quiet" type="submit" data-i18n="保存分类">保存分类</button></form>
+          <form id="detail-folder-create-form" class="input-row"><label for="detail-folder-name" data-i18n="文件夹名称">文件夹名称</label><input id="detail-folder-name" maxlength="40" required><button class="button button-quiet" type="submit" data-i18n="创建并选中">创建并选中</button></form>
+          <p id="detail-folder-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        </details>
+      </section>
+      <div class="sidebar-actions">
+        <button id="language-toggle" class="button button-quiet" type="button" aria-label="Switch language">English</button>
+        <button id="quit-button" data-i18n="退出" class="button button-quiet" type="button">退出</button>
+      </div>
+    </aside>
+    <button id="nav-scrim" class="nav-scrim" type="button" aria-label="关闭导航" hidden></button>
+    <div class="content-shell">
+    <header class="site-header">
+      <button id="nav-toggle" class="button button-quiet" type="button" aria-controls="sidebar" aria-expanded="false" data-i18n="展开导航">展开导航</button>
+    </header>
+
+    <main tabindex="-1" id="home-view">
+      <div class="home-overview">
+      <section class="intro" aria-labelledby="home-title">
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> YOUR DAILY OPEN SOURCE SIGNAL</p>
+        <h1 id="home-title" data-i18n="发现正在发生的好项目。">发现正在发生的好项目。</h1>
+        <p class="intro-copy" data-i18n="从 GitHub 已发现的项目里，读懂真实增长，找到与你关心的方向有关的新发现。">从 GitHub 已发现的项目里，读懂真实增长，找到与你关心的方向有关的新发现。</p>
+        <div class="home-status" hidden>
+        <div class="status-line" role="status" aria-live="polite">
+          <span id="status-indicator" class="status-indicator" aria-hidden="true"></span>
+          <span id="status-text">正在读取本地数据…</span>
+        </div>
+        <p class="saved-time" id="saved-time"></p>
+        </div>
+      </section>
+
+      <section class="keyword-panel" aria-labelledby="keyword-panel-title">
+        <form id="keyword-form" class="keyword-form">
+          <label id="keyword-panel-title" for="keyword-input" data-i18n="关键词">关键词</label>
+          <div class="input-row">
+            <input id="keyword-input" name="keyword" type="text" autocomplete="off"
+                   maxlength="100" placeholder="例如 local AI、design tools" required>
+            <button class="button button-primary" data-i18n="添加关注" type="submit">添加关注</button>
+          </div>
+          <p class="field-hint"><span data-i18n="已关注关键词：">已关注关键词：</span><span id="keyword-list">暂无</span></p>
+          <p id="keyword-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      </div>
+
+      <div id="home-section-bar" class="home-section-bar">
+        <div id="home-section-tabs" class="home-section-tabs" role="tablist" aria-label="项目分类" data-i18n-aria-label="项目分类"></div>
+        <details id="home-section-more" class="home-section-more" hidden>
+          <summary id="home-section-more-toggle" aria-label="所有关键词" data-i18n-aria-label="所有关键词">⋮</summary>
+          <div id="home-section-menu" class="home-section-menu"></div>
+        </details>
+      </div>
+      <section id="growth-results" class="results-section" role="tabpanel" aria-labelledby="home-tab-growth" tabindex="0">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">01 / STAR MOMENTUM</p>
+            <h2 id="growth-title" data-i18n="Star 增长">Star 增长</h2>
+          </div>
+          <p class="section-count" id="growth-count"></p>
+        </div>
+        <section id="growth-returning" class="returning-growth" hidden>
+          <h3 data-i18n="前五中的历史项目">前五中的历史项目</h3>
+          <div id="growth-returning-cards" class="card-grid"></div>
+        </section>
+        <h3 class="discovery-heading" data-i18n="五个新发现">五个新发现</h3>
+        <div id="growth-cards" class="card-grid"></div>
+        <p id="growth-empty" class="empty-state" hidden></p>
+        <p class="section-description" id="growth-explainer">正在读取已保存的项目范围…</p>
+        <div id="coverage-line" class="coverage-line"></div>
+      </section>
+
+      <section id="keyword-results" class="results-section keyword-results" role="tabpanel" aria-labelledby="recommendation-title" tabindex="0" hidden>
+        <p class="section-kicker">02 / PERSONAL DISCOVERY</p>
+        <div class="section-heading keyword-heading">
+          <div class="keyword-heading-title">
+            <h2 id="recommendation-title" data-translation-literal>关键词推荐</h2>
+            <p class="section-count" id="keyword-count"></p>
+          </div>
+          <div class="ai-toolbar-main keyword-ai-controls">
+            <label for="ai-model" data-i18n="AI 模型">AI 模型</label>
+            <select id="ai-model" aria-describedby="ai-usage-note">
+              <option value="">自动选择</option>
+            </select>
+            <button id="ai-connect" data-i18n="连接 Codex" class="button button-quiet" type="button">连接 Codex</button>
+            <span id="ai-connection-status" class="ai-connection-status">正在检查 AI 连接…</span>
+          </div>
+        </div>
+        <div id="keyword-groups" class="keyword-groups"></div>
+        <p id="keyword-empty" class="empty-state" hidden></p>
+        <p class="section-description" data-i18n="符合你关注的方向，并达到 Star 门槛的项目。当天名单保持稳定。">符合你关注的方向，并达到 Star 门槛的项目。当天名单保持稳定。</p>
+        <div class="keyword-ai-notes">
+          <p id="ai-usage-note" data-i18n="点击 AI 按钮后，会把关键词及公开的 GitHub 项目资料发送给 Codex，并消耗账号使用额度。" class="field-hint">点击 AI 按钮后，会把关键词及公开的 GitHub 项目资料发送给 Codex，并消耗账号使用额度。</p>
+          <p id="ai-live" class="ai-live" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </section>
+      <p id="issue-notes" class="issue-notes"></p>
+    </main>
+
+    <main tabindex="-1" id="history-view" class="secondary-view" hidden>
+      <div class="history-overview"><div class="history-overview-copy">
+      <p id="history-kicker" class="section-kicker">PAST DISCOVERIES</p>
+      <div class="history-page-heading"><h1 data-i18n="历史">历史</h1><span id="history-day-label" data-translation-literal hidden></span><a id="history-calendar-back" class="button button-quiet" href="/history" data-i18n="返回日历" hidden>返回日历</a></div>
+      <p id="history-intro" class="section-description" data-i18n="按保存日期回看当时的项目和数据。">按保存日期回看当时的项目和数据。</p>
+      <p id="history-status" class="form-feedback" role="status" aria-live="polite"></p>
+      </div>
+      <form id="history-search-form" class="settings-section history-search-form">
+        <div class="search-field"><label for="history-query" data-i18n="名称或已保存内容">名称或已保存内容</label><input id="history-query" type="search" maxlength="200" aria-describedby="history-search-help"></div>
+        <div class="search-field"><label for="history-from" data-i18n="开始日期">开始日期</label><input id="history-from" type="date"></div>
+        <div class="search-field"><label for="history-to" data-i18n="结束日期">结束日期</label><input id="history-to" type="date"></div>
+        <div class="search-field"><label for="history-source" data-i18n="来源">来源</label><select id="history-source"><option value="all" data-i18n="全部来源">全部来源</option></select></div>
+        <div class="form-actions"><button class="button button-primary" type="submit" data-i18n="搜索历史">搜索历史</button><button id="history-clear" class="button button-quiet" type="button" data-i18n="清空条件">清空条件</button></div>
+        <p id="history-search-help" class="field-hint" data-i18n="组合条件同时匹配；内容仅搜索本机已保存的资料，不联网补读。">组合条件同时匹配；内容仅搜索本机已保存的资料，不联网补读。</p>
+      </form>
+      </div>
+      <section id="history-calendar" class="history-calendar" aria-label="历史日历" data-i18n-aria-label="历史日历">
+        <div class="calendar-controls">
+          <button id="history-prev-month" class="button button-quiet" type="button" data-i18n="上个月">上个月</button>
+          <label for="history-year" data-i18n="年份">年份</label><input id="history-year" type="number" min="1" max="9999" inputmode="numeric">
+          <label for="history-month" data-i18n="月份">月份</label><select id="history-month" aria-label="月份" data-i18n-aria-label="月份">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option>
+            <option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+          </select>
+          <button id="history-next-month" class="button button-quiet" type="button" data-i18n="下个月">下个月</button>
+        </div>
+        <div class="calendar-weekdays" aria-hidden="true"><span data-i18n="周一">周一</span><span data-i18n="周二">周二</span><span data-i18n="周三">周三</span><span data-i18n="周四">周四</span><span data-i18n="周五">周五</span><span data-i18n="周六">周六</span><span data-i18n="周日">周日</span></div>
+        <div id="history-calendar-days" class="calendar-days"></div>
+        <p id="history-calendar-status" role="status" aria-live="polite"></p><button id="history-calendar-retry" class="button button-quiet" type="button" data-i18n="重试" hidden>重试</button>
+      </section>
+      <div id="history-date-groups" class="history-date-groups"></div>
+      <button id="history-more" class="button button-quiet" type="button" data-i18n="加载更多日期" hidden>加载更多日期</button>
+      <p id="history-empty" data-i18n="还没有历史记录。首页更新后，这里会按日期保存推荐。" class="empty-state" hidden>还没有历史记录。首页更新后，这里会按日期保存推荐。</p>
+    </main>
+
+    <main tabindex="-1" id="following-view" class="secondary-view" hidden>
+      <p class="section-kicker">YOUR WATCHLIST</p>
+      <div class="following-page-heading"><h1 data-i18n="我的关注">我的关注</h1><button id="folder-new" class="button button-quiet" type="button" data-i18n="新建文件夹">新建文件夹</button></div>
+      <p class="section-description" data-i18n="你在项目详情中关注的仓库，使用本机最近保存的数据。">你在项目详情中关注的仓库，使用本机最近保存的数据。</p>
+      <p id="following-status" class="form-feedback" role="status" aria-live="polite"></p>
+      <div id="following-folders" class="folder-tabs" role="group" aria-label="关注分类"></div>
+      <form id="following-search" class="following-search"><label for="following-query" data-i18n="名称或简介">名称或简介</label><input id="following-query" type="search" maxlength="200"><button class="button button-quiet" type="submit" data-i18n="搜索">搜索</button><button id="following-clear" class="button button-quiet" type="button" data-i18n="清空">清空</button></form>
+      <section id="following-results" aria-label="关注项目" tabindex="-1">
+      <div class="history-results-scroll" tabindex="0" aria-label="我的关注" data-i18n-aria-label="我的关注">
+        <div id="following-cards" class="history-project-grid"></div>
+      </div>
+      <p id="following-empty" data-i18n="还没有关注项目。打开项目详情，点击“关注”即可加入。" class="empty-state" hidden>还没有关注项目。打开项目详情，点击“关注”即可加入。</p>
+      </section>
+      <dialog id="folder-dialog" class="folder-dialog" aria-labelledby="folder-dialog-title"><form id="folder-editor-form">
+        <h2 id="folder-dialog-title"></h2><label id="folder-name-label" for="folder-name" data-i18n="文件夹名称">文件夹名称</label><input id="folder-name" maxlength="40" autocomplete="off">
+        <label id="folder-destination-label" for="folder-destination" data-i18n="选择文件夹">选择文件夹</label><select id="folder-destination"></select>
+        <p id="folder-dialog-note" data-translation-literal></p><p id="folder-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        <div class="form-actions"><button id="folder-cancel" class="button button-quiet" type="button" data-i18n="取消">取消</button><button id="folder-save" class="button button-primary" type="submit" data-i18n="保存">保存</button></div>
+      </form></dialog>
+    </main>
+
+    <main tabindex="-1" id="settings-view" class="secondary-view" hidden>
+      <p class="section-kicker">YOUR PREFERENCES</p>
+      <h1 data-i18n="设置">设置</h1>
+      <p class="section-description" data-i18n="关键词和阅读设置会保存在这台电脑上。">关键词和阅读设置会保存在这台电脑上。</p>
+      <section class="settings-section" aria-labelledby="settings-codex-title">
+        <h2 id="settings-codex-title">Codex</h2>
+        <p id="settings-codex-status" role="status" aria-live="polite" data-i18n="正在检查 AI 连接…">正在检查 AI 连接…</p>
+        <button id="settings-codex-check" class="button button-quiet" type="button" data-i18n="检查连接">检查连接</button>
+        <button id="settings-codex-connect" class="button button-quiet" type="button" data-i18n="连接 Codex">连接 Codex</button>
+        <button id="settings-codex-auto" class="button button-quiet" type="button" data-i18n="自动选择模型" hidden>自动选择模型</button>
+        <p class="field-hint" data-i18n="检查连接不生成AI内容，不消耗AI额度；内容格式错误请在详情手动更新项目理解。">检查连接不生成AI内容，不消耗AI额度；内容格式错误请在详情手动更新项目理解。</p>
+      </section>
+      <section class="settings-section" aria-labelledby="github-account-title">
+        <h2 id="github-account-title" data-i18n="GitHub 账号">GitHub 账号</h2>
+        <p class="section-description" data-i18n="可选连接免费账号以扩大请求额度；只读取公开项目。">可选连接免费账号以扩大请求额度；只读取公开项目。</p>
+        <p id="github-status" role="status" aria-live="polite"></p>
+        <button id="github-connect" class="button button-primary" type="button" data-i18n="登录 GitHub">登录 GitHub</button>
+        <button id="github-disconnect" class="button button-quiet" type="button" data-i18n="断开 GitHub" hidden>断开 GitHub</button>
+        <div id="github-authorization" hidden>
+          <p data-i18n="复制验证码，在 GitHub 官方页面登录并授权。">复制验证码，在 GitHub 官方页面登录并授权。</p>
+          <input id="github-user-code" readonly aria-label="GitHub verification code">
+          <button id="github-copy-code" type="button" class="button button-quiet" data-i18n="复制验证码">复制验证码</button>
+          <a id="github-auth-link" class="button button-quiet" target="_blank" rel="noopener noreferrer" data-i18n="打开 GitHub 授权页">打开 GitHub 授权页</a>
+          <button id="github-cancel" type="button" class="button button-quiet" data-i18n="取消授权">取消授权</button>
+        </div>
+      </section>
+      <section class="settings-section auto-update-section" aria-labelledby="auto-update-title">
+        <h2 id="auto-update-title" data-i18n="每日更新">每日更新</h2>
+        <p class="section-description" data-i18n="电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；AI 仍由你点击后运行。">电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；AI 仍由你点击后运行。</p>
+        <form id="auto-update-form" class="auto-update-form">
+          <label class="auto-update-switch" for="auto-update-enabled">
+            <input id="auto-update-enabled" type="checkbox">
+            <span data-i18n="开启每日更新">开启每日更新</span>
+          </label>
+          <div class="auto-update-time-field">
+            <label for="auto-update-time" data-i18n="每天运行时间">每天运行时间</label>
+            <input id="auto-update-time" type="time" min="00:00" max="21:59" step="60" aria-describedby="auto-update-time-help auto-update-time-error">
+            <span id="auto-update-time-help" class="field-hint" data-i18n="本地时间，失败后每隔一小时最多再试两次。">本地时间，失败后每隔一小时最多再试两次。</span>
+            <span id="auto-update-time-error" class="field-error" role="alert"></span>
+          </div>
+          <button id="auto-update-save" class="button button-primary" type="submit" data-i18n="保存每日更新">保存每日更新</button>
+        </form>
+        <p id="auto-update-feedback" class="form-feedback" role="status" aria-live="polite" tabindex="-1"></p>
+        <div class="auto-update-status">
+          <p id="auto-update-task-status"></p>
+          <p id="auto-update-last-success"></p>
+          <p id="auto-update-last-attempt"></p>
+        </div>
+      </section>
+      <section class="settings-section" aria-labelledby="settings-keywords-title">
+        <h2 id="settings-keywords-title" data-i18n="关键词管理">关键词管理</h2>
+        <p class="section-description" data-i18n="在首页添加关键词；这里可以暂停推荐、修改最低 Star 或删除关键词。">在首页添加关键词；这里可以暂停推荐、修改最低 Star 或删除关键词。</p>
+        <p id="settings-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        <div id="settings-keywords" class="settings-keywords"></div>
+        <p id="settings-empty" data-i18n="还没有关键词。回到首页顶部，添加你关心的方向。" class="empty-state" hidden>还没有关键词。回到首页顶部，添加你关心的方向。</p>
+      </section>
+      <section class="settings-section" aria-labelledby="font-size-title">
+        <h2 id="font-size-title" data-i18n="字号">字号</h2>
+        <p class="section-description" data-i18n="选择读起来最舒服的大小，会自动保存。">选择读起来最舒服的大小，会自动保存。</p>
+        <div id="font-size-controls" class="font-size-controls" role="group" aria-label="字号">
+          <label id="font-scale-label" for="font-scale">字号倍率</label>
+          <input id="font-scale" type="range" min="0.8" max="2" step="0.0001" value="1" aria-describedby="font-scale-value preference-feedback">
+          <output id="font-scale-value" for="font-scale">1 ×</output>
+          <button id="font-reset" class="button button-quiet" type="button">恢复 1 倍</button>
+        </div>
+        <p id="preference-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        <div class="motion-controls">
+          <label for="motion-preference" data-i18n="界面动效">界面动效</label>
+          <select id="motion-preference" aria-describedby="motion-help motion-feedback">
+            <option value="system" data-i18n="跟随系统">跟随系统</option>
+            <option value="on" data-i18n="轻微动效">轻微动效</option>
+            <option value="off" data-i18n="减少动态">减少动态</option>
+          </select>
+          <p id="motion-help" data-i18n="只影响 StarTrail，不修改 Windows 设置。">只影响 StarTrail，不修改 Windows 设置。</p>
+          <p id="motion-feedback" class="form-feedback" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </main>
+
+    <main tabindex="-1" id="detail-view" hidden>
+      <a href="/" id="back-link" class="back-link">← 返回首页</a>
+      <div class="detail-status-line" role="status" aria-live="polite">
+        <span id="detail-status-indicator" class="status-indicator" aria-hidden="true"></span>
+        <span id="detail-status-text">正在读取本地数据…</span>
+      </div>
+      <article id="detail-article" class="detail-article" tabindex="-1">
+        <div class="detail-header-row">
+          <div id="detail-headline" class="detail-headline"><span id="detail-rank" class="card-rank" hidden></span><h1 id="detail-title">项目详情</h1></div>
+          <div id="detail-actions" class="detail-header-actions">
+            <a id="github-link" class="button button-quiet" target="_blank" rel="noopener noreferrer" data-i18n="查看仓库" hidden>查看仓库</a>
+            <button id="readme-refresh" class="button button-quiet" type="button" data-i18n="更新 README">更新 README</button>
+            <button id="follow-button" data-i18n="关注" class="button button-quiet" type="button">关注</button>
+          </div>
+        </div>
+        <div class="detail-data-row">
+          <span id="detail-source" class="detail-metric"></span>
+          <div id="detail-metrics" class="detail-metrics"></div>
+          <div id="detail-tags" class="detail-tags"></div>
+        </div>
+        <p id="detail-description" class="detail-description" data-translate></p>
+        <section class="project-facts" aria-label="项目关键信息" data-i18n-aria-label="项目关键信息">
+          <div id="detail-facts-scroll" class="project-facts-scroll" tabindex="0" aria-label="项目关键信息" data-i18n-aria-label="项目关键信息">
+            <div id="readme-sections" class="readme-sections">
+              <section class="readme-section"><h3 id="purpose-title" data-i18n="仓库原用途">仓库原用途</h3><div id="readme-purpose" class="readme-section-body" tabindex="0" aria-labelledby="purpose-title"></div></section>
+              <section class="readme-section"><h3 id="problem-title" data-i18n="解决的问题">解决的问题</h3><p id="detail-ai-problem" class="readme-section-body" data-translate tabindex="0" aria-labelledby="problem-title"></p></section>
+              <section class="readme-section"><h3 id="users-title" data-i18n="适合谁">适合谁</h3><p id="detail-ai-users" class="readme-section-body" data-translate tabindex="0" aria-labelledby="users-title"></p></section>
+              <section class="readme-section"><h3 id="highlights-title" data-i18n="核心功能">核心功能</h3><ul id="detail-ai-highlights" class="readme-section-body" tabindex="0" aria-labelledby="highlights-title"></ul></section>
+              <section class="readme-section"><h3 id="scenarios-title" data-i18n="典型场景">典型场景</h3><p id="detail-ai-scenarios" class="readme-section-body" data-translate tabindex="0" aria-labelledby="scenarios-title"></p></section>
+              <section class="readme-section"><h3 id="prerequisites-title" data-i18n="使用门槛">使用门槛</h3><p id="detail-ai-prerequisites" class="readme-section-body" data-translate tabindex="0" aria-labelledby="prerequisites-title"></p></section>
+            </div>
+          </div>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer"><span>StarTrail</span><span aria-hidden="true">·</span><span data-i18n="数据保存在这台电脑上">数据保存在这台电脑上</span></footer>
+    </div>
+  </div>
+</body>
+</html>

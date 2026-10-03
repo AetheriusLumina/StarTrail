@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "startrail"
+version = "0.4.0"
+description = "StarTrail: a local Windows reader for public GitHub projects"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = "MIT"
+authors = [{name = "AetheriusLumina"}]
+classifiers = [
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = []
+
+[project.optional-dependencies]
+translation = ["ctranslate2==4.8.2", "sentencepiece==0.2.2", "numpy==2.5.3", "PyYAML==6.0.3"]
+build = ["PyInstaller==6.22.3", "pyinstaller-hooks-contrib==2026.7"]
+
+[project.scripts]
+startrail = "github_radar.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/AetheriusLumina/StarTrail"
+Issues = "https://github.com/AetheriusLumina/StarTrail/issues"
+
+[tool.setuptools.packages.find]
+include = ["github_radar*"]
+
+[tool.setuptools.package-data]
+github_radar = ["public_config.json", "web_assets/*", "web_assets/fonts/*"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F821", "F822", "F823"]

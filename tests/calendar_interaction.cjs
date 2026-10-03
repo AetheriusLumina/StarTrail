@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const context=vm.createContext({window:{},Date,URLSearchParams});
+const file=__dirname+'/../github_radar/web_assets/history_calendar.js';
+if(fs.existsSync(file))vm.runInContext(fs.readFileSync(file,'utf8'),context);
+assert.ok(context.window.RadarCalendar,'Calendar module exists');
+const {cells,shiftMonth,hasFilters}=context.window.RadarCalendar;
+const days=cells('2024-02');
+assert.equal(days.length,35);assert.equal(days[0],null);assert.equal(days[3],'2024-02-01');assert.equal(days[31],'2024-02-29');
+assert.equal(cells('2026-02').filter(Boolean).length,28);
+assert.equal(cells('0001-01')[0],'0001-01-01','Small years do not become 1901');
+assert.equal(shiftMonth('2026-12',1),'2027-01');assert.equal(shiftMonth('2026-01',-1),'2025-12');
+assert.equal(shiftMonth('0001-01',-1),'0001-01');
+assert.equal(hasFilters({q:'',from:'',to:'',source:'all'}),false);
+for(const value of [{q:'repo'},{from:'2026-01-01'},{to:'2026-01-31'},{source:'growth'}])assert.equal(hasFilters(value),true);
+console.log('Calendar date and mode tests passed');

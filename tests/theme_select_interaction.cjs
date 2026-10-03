@@ -1,0 +1,24 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(__dirname+'/../github_radar/web_assets/app.js','utf8');
+const begin=source.indexOf('/* Forest select widgets */');
+assert.ok(begin>=0,'Theme listboxes replace operating-system blue menus');
+class Node{constructor(){this.children=[];this.listeners={};this.attrs={};this.style={};this.classList={add(){}};this.options=[];this.parentNode={insertBefore(){}};}append(...n){this.children.push(...n);}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}addEventListener(k,v){this.listeners[k]=v;}getBoundingClientRect(){return {left:10,top:30,bottom:70,width:180,height:40};}focus(){this.focused=true;}remove(){this.removed=true;}contains(n){return this===n||this.children.includes(n);}dispatchEvent(e){this.dispatched=e;this.listeners[e.type]?.(e);}}
+const doc={body:new Node(),createElement:()=>new Node(),listeners:{},addEventListener(k,v){this.listeners[k]=v;},querySelectorAll:()=>[]};
+const win={innerHeight:600,innerWidth:900,addEventListener(){},getComputedStyle:()=>({font:'16px serif'})};
+const context=vm.createContext({window:win,document:doc,Event:class{constructor(type,options){this.type=type;this.bubbles=options.bubbles;}},motionEnabled:()=>true,cardTransition:{reveal(){}},MutationObserver:class{observe(){}}});
+vm.runInContext(source.slice(begin),context);
+const select=new Node();select.id='motion';select.labels=[{textContent:'交互动效'}];select.options=[{value:'system',textContent:'跟随系统'},{value:'on',textContent:'轻微动态'},{value:'off',textContent:'减少动态'}];select.value='system';
+const widget=context.window.RadarThemeSelect.enhance(select);assert.equal(widget.button.attrs.role,'combobox');assert.equal(widget.caption.textContent,'跟随系统');
+widget.button.listeners.click();assert.equal(widget.button.attrs['aria-expanded'],'true');assert.equal(doc.body.children.at(-1).attrs.role,'listbox');
+doc.body.children.at(-1).children[1].listeners.click();assert.equal(select.value,'on');assert.equal(select.dispatched.type,'change');assert.equal(widget.caption.textContent,'轻微动态');assert.equal(widget.button.attrs['aria-expanded'],'false');
+widget.button.listeners.click();doc.listeners.pointerdown({target:new Node()});assert.equal(widget.button.attrs['aria-expanded'],'false','Outside click closes menu without a value change');
+select.disabled=true;widget.sync();assert.equal(widget.button.disabled,true);
+const modal=new Node(),destination=new Node();destination.id='folder-destination';destination.hidden=true;destination.closest=()=>modal;destination.options=select.options;destination.value='system';
+const folderWidget=win.RadarThemeSelect.enhance(destination);
+assert.equal(folderWidget.wrapper.hidden,true,'Initially hidden native control has no visible proxy');
+win.RadarThemeSelect.setHidden(destination,false);win.RadarThemeSelect.focus(destination);
+assert.equal(destination.hidden,true,'Native select remains hidden in a modal');assert.equal(folderWidget.wrapper.hidden,false);assert.equal(folderWidget.button.focused,true);
+folderWidget.button.listeners.click();assert.equal(modal.children.at(-1).attrs.role,'listbox','Modal menu belongs inside active dialog, never inert body');
+modal.children.at(-1).children[1].listeners.click();assert.equal(destination.value,'on');
+win.RadarThemeSelect.setHidden(destination,true);assert.equal(folderWidget.wrapper.hidden,true);
+console.log('Theme select: real value/change, accessible listbox, outside close and disabled state passed');

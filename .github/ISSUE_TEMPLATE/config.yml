@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全漏洞 / Security vulnerability
+    url: https://github.com/AetheriusLumina/StarTrail/security
+    about: 请使用私密报告；公开内容不要附凭证或个人日志。

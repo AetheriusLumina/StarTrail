@@ -1,0 +1,354 @@
+"""Small, unauthenticated GitHub REST client for public repositories."""
+
+import json
+import codecs
+import base64
+import binascii
+import socket
+import time
+from datetime import datetime, timedelta, timezone
+from http.client import HTTPException
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlparse, parse_qs
+from urllib.request import Request, urlopen, build_opener
+
+from .models import OfficialStarWeek, Repository, StarDay
+from .discovery_types import DiscoveryBatch, DiscoveryCandidate, SearchPage, valid_repository_name
+from .public_http import MAX_RESPONSE_BYTES, SameOriginRedirect, SourceRequestError
+from .readme_types import ReadmeFetch
+
+
+class GitHubRequestError(Exception):
+    """A request failed or returned data the application cannot trust."""
+
+
+class GitHubRateLimitError(GitHubRequestError):
+    def __init__(self, reset_at: int | None):
+        self.reset_at = reset_at
+        super().__init__("GitHub 请求额度已用完，请稍后再试")
+
+
+class GitHubClient:
+    BASE_URL = "https://api.github.com"
+
+    def __init__(self, opener=urlopen, budget=None, clock=time.monotonic, token_provider=None, on_auth_failure=None):
+        self._opener = build_opener(SameOriginRedirect()).open if opener is urlopen else opener
+        self.remaining: int | None = None
+        self.core_remaining: int | None = None
+        self.search_remaining: int | None = None
+        self.reset_at: int | None = None
+        self.core_reset_at: int | None = None
+        self.search_reset_at: int | None = None
+        self.budget, self.clock = budget, clock
+        self._last_headers = {}
+        self.token_provider = token_provider
+        self.on_auth_failure=on_auth_failure
+
+    def _open_authenticated(self,request,timeout):
+        try:return self._opener(request,timeout=timeout)
+        except HTTPError as exc:
+            authorization=request.get_header('Authorization')
+            if exc.code!=401 or not authorization:raise
+            exc.close()
+            if self.on_auth_failure:self.on_auth_failure(authorization.removeprefix('Bearer '))
+            # A rotated token or anonymous request has a different quota identity.
+            self.remaining=self.core_remaining=self.search_remaining=None
+            self.reset_at=self.core_reset_at=self.search_reset_at=None
+            headers={k:v for k,v in request.header_items() if k.lower()!='authorization'}
+            updated=self._authorization() if self.on_auth_failure else {}
+            if updated.get('Authorization')!=authorization:headers.update(updated)
+            if self.budget is not None:
+                self.budget.core_remaining=self.budget.search_remaining=None
+                self.budget._core_probe=self.budget._search_probe=False
+                resource='search' if urlparse(request.full_url).path.startswith('/search/') else 'core'
+                try:self.budget.spend(resource,1,self.clock())
+                except ValueError as error:raise GitHubRequestError('GitHub 请求预算或更新时间已到限制') from error
+                timeout=min(timeout,self.budget.deadline-self.clock())
+            retry=Request(request.full_url,headers=headers)
+            # One recovery only; never loop on a rejected credential.
+            return self._opener(retry,timeout=timeout)
+
+    def _authorization(self):
+        token = self.token_provider() if self.token_provider else None
+        return {"Authorization": "Bearer " + token} if token else {}
+
+    def search(
+        self, query: str, page: int = 1, per_page: int = 100, sort: str = "stars"
+    ) -> list[Repository]:
+        result = self.search_page(query, page, per_page, sort)
+        if result.incomplete_results:
+            raise GitHubRequestError("GitHub 搜索结果不完整，请稍后再试")
+        return list(result.items)
+
+    def search_page(self, query: str, page: int = 1, per_page: int = 100,
+                    sort: str = "stars") -> SearchPage:
+        if not 1 <= page <= 10 or not 1 <= per_page <= 100:
+            raise ValueError("GitHub 搜索页码或每页数量无效")
+        params = urlencode(
+            {"q": query, "sort": sort, "order": "desc", "page": page, "per_page": per_page}
+        )
+        payload = self._get_json(f"/search/repositories?{params}")
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise GitHubRequestError("GitHub 搜索结果格式有误")
+        total = payload.get("total_count", len(payload["items"]))
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            raise GitHubRequestError("GitHub 搜索结果数量格式有误")
+        return SearchPage(tuple(self._repository(item) for item in payload["items"]),
+                          total, payload.get("incomplete_results") is True)
+
+    def public_repository_page(self, since: int | None) -> DiscoveryBatch:
+        if since is not None and (isinstance(since, bool) or not isinstance(since, int) or since < 0):
+            raise ValueError("公开仓库游标无效")
+        path = "/repositories" + ("?" + urlencode({"since": since}) if since is not None else "")
+        payload = self._get_json(path)
+        if not isinstance(payload, list):
+            raise GitHubRequestError("公开仓库目录格式变化")
+        observed = datetime.now(timezone.utc).isoformat()
+        candidates = []
+        for row in payload:
+            if (isinstance(row, dict) and valid_repository_name(row.get("full_name"))
+                    and isinstance(row.get("id"), int) and not isinstance(row["id"], bool) and row["id"] > 0):
+                candidates.append(DiscoveryCandidate(row["full_name"], row["id"],
+                                                     ("github_public_catalog",), observed))
+        link = {str(k).lower(): v for k,v in self._last_headers.items()}.get("link", "")
+        cursor = None
+        for segment in link.split(","):
+            if 'rel="next"' not in segment:
+                continue
+            target = urlparse(segment.split("<")[-1].split(">")[0])
+            raw = parse_qs(target.query).get("since", [""])[0]
+            if target.scheme == "https" and target.netloc == "api.github.com" and target.path == "/repositories" and raw.isdecimal():
+                cursor = raw
+        return DiscoveryBatch("github_public_catalog", tuple(candidates), cursor, cursor is None,
+                              ("公开仓库目录持续积累；单批不是全站覆盖",))
+
+    def get_repository(self, full_name: str) -> Repository:
+        parts = full_name.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("仓库名称应为 owner/repository")
+        path = f"/repos/{quote(parts[0], safe='')}/{quote(parts[1], safe='')}"
+        return self._repository(self._get_json(path))
+
+    def get_repository_by_id(self, repo_id: int) -> Repository:
+        if isinstance(repo_id, bool) or not isinstance(repo_id, int) or repo_id <= 0:
+            raise ValueError('仓库 ID 无效')
+        result = self._repository(self._get_json(f'/repositories/{repo_id}'))
+        if result.id != repo_id:
+            raise GitHubRequestError('GitHub 返回的仓库 ID 不一致。')
+        return result
+
+    def fetch_readme_by_id(self, repo_id: int, etag: str | None = None,
+                           max_bytes: int = 524288) -> ReadmeFetch:
+        if isinstance(repo_id, bool) or not isinstance(repo_id, int) or repo_id <= 0:
+            raise ValueError('仓库 ID 无效')
+        return self.fetch_readme(repo_id, etag, max_bytes)
+
+    def fetch_readme(self, full_name: str, etag: str | None = None,
+                     max_bytes: int = 524288) -> ReadmeFetch:
+        by_id = isinstance(full_name, int) and not isinstance(full_name, bool) and full_name > 0
+        if (not by_id and not valid_repository_name(full_name)) or not 1 <= max_bytes <= 524288:
+            raise ValueError('README 请求参数无效')
+        self.renew_expired_quotas()
+        if self.core_remaining == 0: raise GitHubRateLimitError(self.core_reset_at)
+        timeout = 20
+        if self.budget is not None:
+            try: self.budget.spend('core', 1, self.clock())
+            except ValueError as exc: raise GitHubRequestError('GitHub 请求预算或更新时间已到限制') from exc
+            timeout = min(timeout, self.budget.deadline - self.clock())
+        path = f'/repositories/{full_name}/readme' if by_id else '/repos/' + '/'.join(quote(part, safe='') for part in full_name.split('/')) + '/readme'
+        headers = {'User-Agent':'GitHubRadar/0.1', 'Accept':'application/vnd.github+json' if by_id else 'application/vnd.github.raw+json',
+                   'X-GitHub-Api-Version':'2022-11-28', **self._authorization()}
+        if etag: headers['If-None-Match'] = etag
+        request = Request(self.BASE_URL + path, headers=headers)
+        try:
+            with self._open_authenticated(request, timeout=timeout) as response:
+                self._capture_limit(response.headers, path)
+                # JSON has base64 expansion and metadata; both wire and decoded text are bounded.
+                wire_limit = max_bytes * 2 + 16384 if by_id else max_bytes
+                raw = response.read(wire_limit + 1)
+                source_url = None
+                if by_id:
+                    if len(raw) > wire_limit:
+                        raise GitHubRequestError('README 文件超过读取大小限制，请在 GitHub 查看原文。')
+                    payload = json.loads(raw.decode('utf-8'))
+                    if not isinstance(payload, dict) or payload.get('encoding') != 'base64':
+                        raise GitHubRequestError('README 文件过大或内容格式不支持，请在 GitHub 查看原文。')
+                    content, file_path, source_url = payload.get('content'), payload.get('path'), payload.get('html_url')
+                    if (not isinstance(content, str) or not isinstance(file_path, str)
+                            or not file_path or any(p in ('', '.', '..') for p in file_path.split('/'))
+                            or not isinstance(source_url, str)):
+                        raise GitHubRequestError('README 源文件信息无效。')
+                    source = urlparse(source_url)
+                    parts = source.path.split('/')
+                    if (source.scheme != 'https' or source.netloc != 'github.com'
+                            or len(parts) < 6 or parts[3] != 'blob' or source.query or source.fragment
+                            or not source.path.endswith('/' + quote(file_path, safe='/'))):
+                        raise GitHubRequestError('README 源文件地址无效。')
+                    raw = base64.b64decode(''.join(content.split()), validate=True)
+                truncated = len(raw) > max_bytes
+                raw = raw[:max_bytes]
+                # A bounded read may split the final UTF-8 character; only that tail can be dropped.
+                text = raw.decode('utf-8', errors='strict') if not truncated else codecs.getincrementaldecoder('utf-8')().decode(raw, final=False)
+                return ReadmeFetch(text, response.headers.get('ETag'), False, truncated, source_url)
+        except HTTPError as exc:
+            self._capture_limit(exc.headers, path)
+            if exc.code == 304: return ReadmeFetch(None, etag, True, False)
+            if exc.code == 404: return ReadmeFetch(None, None, False, False)
+            if exc.code == 429 or (exc.code == 403 and self.core_remaining == 0):
+                raise GitHubRateLimitError(self.core_reset_at) from exc
+            raise GitHubRequestError(f'GitHub README 请求失败（HTTP {exc.code}）') from exc
+        except UnicodeDecodeError as exc:
+            raise GitHubRequestError('README 不是有效的 UTF-8 文本。') from exc
+        except (json.JSONDecodeError, binascii.Error) as exc:
+            raise GitHubRequestError('README 内容格式无效。') from exc
+        except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
+            raise GitHubRequestError('连接 GitHub 失败，请检查网络') from exc
+
+    def readme_excerpt(self, full_name: str, max_chars: int = 2400) -> str | None:
+        """Read only a bounded public README excerpt; a missing README is optional."""
+        parts = full_name.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("仓库名称应为 owner/repository")
+        if not 1 <= max_chars <= 6000:
+            raise ValueError("README 摘录长度无效")
+        path = f"/repos/{quote(parts[0], safe='')}/{quote(parts[1], safe='')}/readme"
+        request = Request(
+            f"{self.BASE_URL}{path}",
+            headers={"User-Agent": "GitHubRadar/0.1",
+                     "Accept": "application/vnd.github.raw+json",
+                     "X-GitHub-Api-Version": "2022-11-28", **self._authorization()},
+        )
+        try:
+            with self._open_authenticated(request, timeout=15) as response:
+                self._capture_limit(response.headers, path)
+                raw = response.read(max_chars * 4 + 1)
+            return raw.decode("utf-8", errors="replace")[:max_chars] or None
+        except HTTPError as exc:
+            self._capture_limit(exc.headers, path)
+            if exc.code == 404:
+                return None
+            if exc.code == 429 or (exc.code == 403 and self.remaining == 0):
+                raise GitHubRateLimitError(self.reset_at) from exc
+            raise GitHubRequestError(f"GitHub README 请求失败（HTTP {exc.code}）") from exc
+        except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
+            raise GitHubRequestError("连接 GitHub 失败，请检查网络") from exc
+
+    def star_history(self, full_name: str) -> list[StarDay]:
+        """Legacy date expansion. Ranking must use confirmed_star_days instead."""
+        result = []
+        for week in self.star_history_weeks(full_name):
+            first = datetime.fromtimestamp(week.week, timezone.utc).date()
+            result.extend(StarDay((first + timedelta(days=offset)).isoformat(), count)
+                          for offset, count in enumerate(week.days))
+        return sorted(result, key=lambda item: item.stat_date)
+
+    def star_history_weeks(self, full_name: str) -> list[OfficialStarWeek]:
+        parts = full_name.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError("仓库名称应为 owner/repository")
+        path = f"/repos/{quote(parts[0], safe='')}/{quote(parts[1], safe='')}/stargazers/history?per_page=2"
+        payload = self._get_json(path)
+        if not isinstance(payload, list):
+            raise GitHubRequestError("GitHub Star 历史格式有误")
+        result: list[OfficialStarWeek] = []
+        for week in payload:
+            if not isinstance(week, dict) or isinstance(week.get("week"), bool) or not isinstance(week.get("week"), int):
+                raise GitHubRequestError("GitHub Star 历史格式有误")
+            days = week.get("days")
+            if not isinstance(days, list) or len(days) != 7 or any(
+                isinstance(count, bool) or not isinstance(count, int) or count < 0 for count in days
+            ):
+                raise GitHubRequestError("GitHub Star 历史格式有误")
+            try:
+                datetime.fromtimestamp(week["week"], timezone.utc)
+            except (OverflowError, OSError, ValueError) as exc:
+                raise GitHubRequestError("GitHub Star 历史日期无效") from exc
+            result.append(OfficialStarWeek(week["week"], tuple(days)))
+        return sorted(result, key=lambda item: item.week)
+
+    def _get_json(self, path: str):
+        timeout = 20
+        if self.budget is not None:
+            resource = "search" if path.startswith("/search/") else "core"
+            try:
+                self.budget.spend(resource, 1, self.clock())
+            except ValueError as exc:
+                raise GitHubRequestError("GitHub 请求预算或更新时间已到限制") from exc
+            timeout = min(timeout, self.budget.deadline - self.clock())
+        request = Request(
+            f"{self.BASE_URL}{path}",
+            headers={
+                "User-Agent": "GitHubRadar/0.1",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                **self._authorization(),
+            },
+        )
+        try:
+            with self._open_authenticated(request, timeout=timeout) as response:
+                self._capture_limit(response.headers, path)
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise GitHubRequestError("GitHub 响应超过 10 MB 限制")
+                return json.loads(raw.decode("utf-8"))
+        except HTTPError as exc:
+            self._capture_limit(exc.headers, path)
+            if exc.code == 429 or (exc.code == 403 and self.remaining == 0):
+                raise GitHubRateLimitError(self.reset_at) from exc
+            raise GitHubRequestError(f"GitHub 请求失败（HTTP {exc.code}）") from exc
+        except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
+            raise GitHubRequestError("连接 GitHub 失败，请检查网络") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise GitHubRequestError("GitHub 返回了无法读取的数据") from exc
+
+    def _capture_limit(self, headers, path: str) -> None:
+        self._last_headers = dict(headers.items())
+        if self.budget is not None:
+            self.budget.observe(headers)
+        lowered = {str(key).lower(): value for key, value in headers.items()}
+        self.remaining = self._header_int(lowered.get("x-ratelimit-remaining"))
+        self.reset_at = self._header_int(lowered.get("x-ratelimit-reset"))
+        resource = lowered.get("x-ratelimit-resource") or ("search" if path.startswith("/search/") else "core")
+        if resource == "core":
+            self.core_remaining = self.remaining
+            self.core_reset_at = self.reset_at
+        elif resource == "search":
+            self.search_remaining = self.remaining
+            self.search_reset_at = self.reset_at
+
+    def renew_expired_quotas(self, now=None):
+        """A passed server reset permits one fresh probe, never assumes a quota."""
+        now = time.time() if now is None else now
+        for resource in ("core", "search"):
+            reset = getattr(self, resource + "_reset_at")
+            if reset is not None and now >= reset:
+                setattr(self, resource + "_remaining", None)
+                setattr(self, resource + "_reset_at", None)
+
+    @staticmethod
+    def _header_int(value) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _repository(item) -> Repository:
+        try:
+            if not isinstance(item, dict):
+                raise TypeError("repository is not an object")
+            topics = item.get("topics") or []
+            if not isinstance(topics, list):
+                raise TypeError("topics is not a list")
+            return Repository(
+                id=int(item["id"]),
+                full_name=str(item["full_name"]),
+                html_url=str(item["html_url"]),
+                description=str(item.get("description") or ""),
+                topics=tuple(str(topic) for topic in topics),
+                language=item.get("language"),
+                stars=int(item["stargazers_count"]),
+                archived=bool(item["archived"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise GitHubRequestError("GitHub 仓库数据缺少必要字段") from exc

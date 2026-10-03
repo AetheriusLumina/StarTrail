@@ -1,0 +1,29 @@
+name: Windows checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated dependencies
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python -m pip install -c requirements/constraints.txt -e ".[translation]"
+      - name: Public file and regression checks
+        shell: pwsh
+        run: |
+          .venv/Scripts/python scripts/check_public.py --tracked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:RADAR_TEST_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path
+          .venv/Scripts/python -m unittest discover -s tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check

@@ -1,0 +1,1 @@
+"""StarTrail local project discovery."""

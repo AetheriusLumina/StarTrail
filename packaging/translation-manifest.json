@@ -1,0 +1,9 @@
+{
+  "model_version": "argos-1.9-ct2-4.8.2-sp-0.2.2",
+  "runtime": {"ctranslate2": "4.8.2", "sentencepiece": "0.2.2", "numpy": "2.5.3", "pyyaml": "6.0.3"},
+  "models": [
+    {"name": "en-zh", "archive": "en-zh.argosmodel", "sha256": "433e7c4f034d87fbe2353161e05f18646d7999452f801a4e1f0378522b9850ab", "prefix": "translate-en_zh-1_9/", "source": "https://argos-net.com/v1/translate-en_zh-1_9.argosmodel"},
+    {"name": "zh-en", "archive": "zh-en.argosmodel", "sha256": "62e7af5a3a48b530e47b7b3e5c78c2de79073ecd815750d2bf3ab35b4a67da2d", "prefix": "translate-zh_en-1_9/", "source": "https://argos-net.com/v1/translate-zh_en-1_9.argosmodel"}
+  ],
+  "required_files": ["metadata.json", "sentencepiece.model", "README.md", "model/config.json", "model/model.bin", "model/shared_vocabulary.json"]
+}

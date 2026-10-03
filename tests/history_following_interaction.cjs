@@ -1,0 +1,42 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const context=vm.createContext({window:{},URLSearchParams});
+const file=__dirname+'/../github_radar/web_assets/history_following.js';
+if(fs.existsSync(file)) vm.runInContext(fs.readFileSync(file,'utf8'),context);
+assert.ok(context.window.RadarHistoryFollowing,'History and folder controller must exist');
+const {historyController,folderSelection}=context.window.RadarHistoryFollowing;
+const plain=x=>JSON.parse(JSON.stringify(x));
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+(async()=>{
+  const requests=[],results=[],urls=[];let delayed=null;
+  const api=async path=>{requests.push(path);if(delayed){const p=delayed;delayed=null;return p.promise;}
+    return path.includes('/2026-')?{sections:[{cards:[{growth_rank:9,stars:'100'}]}]}:
+      {dates:[{date:'2026-09-30',count:1}],next_cursor:30,matched_total:1,history_total:2};};
+  const h=historyController({api,writeURL:url=>urls.push(url),onIndex:(data,append)=>results.push([plain(data),append])});
+  await h.search({q:'Straße %_中文',from:'2026-09-01',to:'2026-09-30',source:'keyword:7'});
+  const query=new URLSearchParams(requests[0].split('?')[1]);
+  assert.equal(query.get('q'),'Straße %_中文');assert.equal(query.get('from'),'2026-09-01');
+  assert.equal(query.get('source'),'keyword:7');assert.ok(urls[0].startsWith('/history?'));
+  await h.more();assert.ok(requests.at(-1).includes('cursor=30'));assert.equal(results.at(-1)[1],true);
+  const old=deferred();delayed=old;const stale=h.day('2026-09-30');
+  await h.search({q:'new'});old.resolve({sections:[{cards:[{growth_rank:1}]}]});assert.equal(await stale,null);
+  const current=await h.day('2026-09-30');assert.equal(current.sections[0].cards[0].growth_rank,9);
+  await h.search({});assert.equal(urls.at(-1),'/history');assert.equal(h.emptyMessage({history_total:0}),'还没有历史记录。首页更新后，这里会按日期保存推荐。');
+  assert.equal(h.emptyMessage({history_total:2}),'没有符合这些条件的历史项目。');
+  const pending=deferred();delayed=pending;const first=h.search({q:'slow'});await h.search({q:'fast'});
+  const before=results.length;pending.resolve({dates:[{date:'old'}]});await first;assert.equal(results.length,before);
+  const parsed=h.readURL('?q=用户&from=2026-09-01&source=keyword%3A7');assert.equal(parsed.q,'用户');
+  let fail=true;const writes=[];
+  const f=folderSelection({post:async(path,payload)=>{writes.push([path,plain(payload)]);if(fail)throw Error('disk full');
+    return path==='/api/folders'?{folder:{id:3,name:payload.name,count:0}}:{ids:payload.ids};}});
+  f.load(1,[1],[{id:1,name:'中文'}]);f.select(2,true);
+  await assert.rejects(f.save(),/disk full/);assert.deepEqual(plain(f.ids()),[1,2]);assert.deepEqual(plain(f.saved()),[1]);
+  await assert.rejects(f.create('用户 %_'),/disk full/);assert.deepEqual(plain(f.ids()),[1,2]);
+  fail=false;await f.create('用户 %_');assert.deepEqual(plain(f.ids()),[1,2,3]);assert.equal(f.folders().at(-1).name,'用户 %_');
+  await f.save();assert.deepEqual(plain(f.saved()),[1,2,3]);assert.deepEqual(writes.at(-1)[1],{ids:[1,2,3]});
+  f.unfollow();assert.deepEqual(plain(f.ids()),[]);assert.deepEqual(plain(f.saved()),[]);
+  const hold=deferred();const race=folderSelection({post:async()=>hold.promise});race.load(1,[1],[]);
+  const save=race.save();race.load(2,[2],[]);hold.resolve({ids:[1]});await save;assert.deepEqual(plain(race.saved()),[2]);
+  console.log('History/following controller: intersection, pagination, stale responses, rank, empty states, multi-folder and failure retention OK');
+})().catch(error=>{console.error(error);process.exitCode=1;});
