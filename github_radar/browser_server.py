@@ -167,6 +167,11 @@ class BrowserServer:
             if not secrets.compare_digest(handler.headers.get("X-Radar-Token", ""), self.token):
                 self._send(handler, 403, {"error": "forbidden"})
                 return
+            if path == '/api/search/settings':
+                self._send(handler,200,{'enabled':self.store.load_search_enabled()});return
+            if path == '/api/search/status':
+                from .search_storage import SearchStore
+                self._send(handler,200,{'jobs':[asdict(p) for p in SearchStore(self.store).current_progress(date.today().isoformat())]});return
             if path == "/api/software-update":
                 self._send(handler, 200, self.software_updater.check())
                 return
@@ -398,6 +403,20 @@ class BrowserServer:
             self._software_update_action(handler,path,payload);return
         if path.startswith('/api/search/keywords/') and path.endswith('/expansion'):
             self._search_expansion(handler,path,payload);return
+        if path in ('/api/search/settings','/api/search/cancel'):
+            if path.endswith('/settings'):
+                if set(payload) != {'enabled'} or type(payload['enabled']) is not bool:
+                    self._send(handler,400,{'error':'自动 AI 设置无效'});return
+                self.store.save_search_enabled(payload['enabled'])
+            elif payload:
+                self._send(handler,400,{'error':'停止检索不接受额外参数'});return
+            if path.endswith('/cancel') or not payload['enabled']:
+                jobs=getattr(self.service,'search_jobs',None)
+                if jobs is not None:jobs.cancel()
+            self._send(handler,200 if path.endswith('/settings') else 202,
+                       {'enabled':self.store.load_search_enabled(),'status':'saved' if path.endswith('/settings') else 'cancelling'});return
+        if path.startswith('/api/search/'):
+            self._send(handler,404,{'error':'not_found'});return
         if path.startswith('/api/translation/'):
             identity=path.removeprefix('/api/translation/').removesuffix('/cancel')
             if not path.endswith('/cancel') or len(identity)!=32 or any(c not in '0123456789abcdef' for c in identity):
@@ -1088,6 +1107,7 @@ class BrowserServer:
             "sections": sections,
             "keyword_groups": keyword_groups,
             "search_progress": [asdict(p) for p in search_progress],
+            "search_enabled": self.store.load_search_enabled(),
             "ai_busy": ai_state is not None and ai_state["status"] == "running",
         }
 

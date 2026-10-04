@@ -849,6 +849,18 @@ class RadarStore:
                 ON CONFLICT(name) DO UPDATE SET value=excluded.value""",
                 (("language", language), ("font_scale", str(float(font_scale)))))
 
+    def load_search_enabled(self) -> bool:
+        """The automatic paid discovery switch is independent of daily scheduling."""
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT value FROM settings WHERE name='search_ai_enabled'").fetchone()
+        return row is None or row['value'] == '1'
+
+    def save_search_enabled(self, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise ValueError('自动 AI 设置无效')
+        with closing(self._connect()) as connection, connection:
+            connection.execute("INSERT INTO settings VALUES ('search_ai_enabled',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(int(enabled)),))
+
     def load_auto_update_settings(self) -> AutoUpdateSettings:
         with closing(self._connect()) as connection:
             rows = connection.execute(

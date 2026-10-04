@@ -322,6 +322,19 @@ async function testGroupedAIState() {
   assert.equal(app.node("keyword-count").textContent, "0 个项目");
 }
 
+async function testSearchSettingsLateReadCannotUndoSavedSelection(){
+  const app=scenario();await flush();const fallback=app.context.fetch;let release;
+  app.context.fetch=async(url,options={})=>{
+    if(url==='/api/search/settings')return options.method==='POST'
+      ?{ok:true,status:200,json:async()=>({enabled:true})}
+      :await new Promise(resolve=>release=()=>resolve({ok:true,status:200,json:async()=>({enabled:false})}));
+    return fallback(url,options);
+  };
+  const pending=vm.runInContext('loadSearchSettings()',app.context);await flush();
+  const input=app.node('search-ai-enabled');input.checked=true;
+  await input.listeners.get('change')();release();await pending;
+  assert.equal(input.checked,true,'Late settings GET must not replace a successfully saved AI allowance choice');
+}
 async function testFullVerifiedKeywordGroupHasNoUselessAction() {
   const app = scenario();
   await flush();
@@ -338,6 +351,10 @@ async function testFullVerifiedKeywordGroupHasNoUselessAction() {
   assert.doesNotMatch(root.querySelectorAll('.ai-group-status')[0].textContent,/继续查找/);
   assert.equal(root.querySelectorAll('.card-rank').length,5);
   assert.match(root.querySelectorAll('.card-headline')[0].className,/rank-1/);
+  app.setIssue({keyword_groups:[{...group,search_progress:{pending:10}}]});
+  await vm.runInContext('loadIssue()',app.context);
+  assert.equal(root.querySelectorAll('.ai-refine-button')[0].hidden,false);
+  assert.equal(root.querySelectorAll('.ai-refine-button')[0].disabled,false,'Pending candidates can continue even with five verified cards');
   app.setIssue({keyword_groups:[{...group,cards:cards.slice(0,3)}]});
   await vm.runInContext('loadIssue()',app.context);
   assert.equal(root.querySelectorAll('.ai-refine-button')[0].hidden,false);
@@ -1124,6 +1141,7 @@ async function testMainPageTransitionsAndSavedKeywordSwitch(){
   await testDetailStatusForUpdateAndExit();
   await testRefreshAcknowledgementTimeoutAllowsRetry();
   await testGroupedAIState();
+  await testSearchSettingsLateReadCannotUndoSavedSelection();
   await testFullVerifiedKeywordGroupHasNoUselessAction();
   await testKeywordUsesSavedNoncontiguousRanksAndSameDetailTitle();
   await testGroupButtonKeepsFocusWhenCardsChange();

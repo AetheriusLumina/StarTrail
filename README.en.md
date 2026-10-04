@@ -11,7 +11,7 @@ Finding an interesting repository is only the beginning: understanding what it i
 3. **Organize:** revisit dated snapshots, follow projects, search folders, drag cards between categories, or classify directly from any detail page.
 
 > [!TIP]
-> The installer includes the runtime and offline Chinese/English models. **Local translation uses no AI quota.** Basic discovery and reading work without Codex. With Codex connected, project updates automatically run AI search and checks using the connected account's quota; full project explanations remain manual.
+> The installer includes the runtime and offline Chinese/English models. **Local translation uses no AI quota.** Basic discovery and reading work without Codex. With automatic AI discovery enabled and Codex connected, project updates automatically run AI search and checks using the connected account's quota; full project explanations remain manual.
 
 **Navigation:** [Get started](#download-and-get-started) · [The story](#how-this-project-started) · [Features](#features-and-interface) · [Data and privacy](#data-and-privacy) · [Development](#development-and-contributions) · [Limitations](#limitations-and-next-directions) · [License](#license-and-thanks)
 
@@ -149,7 +149,7 @@ The forest background, translucent cards, menus, and scrollbars share a consiste
 <summary>Reading and update settings</summary>
 
 1. Opening, returning, and switching use approximately 350ms reveals of real elements. The old view leaves immediately; static headers do not replay. Motion can be reduced.
-2. Settings cover typography, motion, keywords, scheduled refreshes, GitHub authorization, and Codex connection.
+2. Settings cover typography, motion, keywords, scheduled refreshes, automatic AI discovery, GitHub authorization, and Codex connection. Automatic AI can be disabled, and an active discovery can be stopped while keeping saved results.
 3. The software-version notice dismisses after ten seconds. Installer confirmation stays separate from project-data updates.
 4. Reading uses the default browser. Exit stops the local service; a tab may need manual closing if browser rules prevent programmatic closure.
 

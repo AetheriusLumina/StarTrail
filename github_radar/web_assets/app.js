@@ -432,13 +432,13 @@ function renderKeywordGroups(issue) {
     button.hidden = verifiedFull && !(group.search_progress?.pending);
     button.textContent = tr((group.cards || []).length >= 5 ? "AI 核实" : "AI 核实并补齐");
     button.disabled = !aiConnection.ready || issue.busy || issue.ai_busy || quitting
-      || verifiedFull;
+      || (verifiedFull && !group.search_progress?.pending);
     status.className = `ai-group-status ${group.ai_status || "idle"}`;
     status.textContent = group.ai_status === "running" ? tr("AI 正在检查本组候选，现有卡片继续显示。")
       : group.ai_status === "error" ? (language === "en" ? `Review failed: ${localizeServerText(group.ai_message || "请稍后重试")}` : `本组分析失败：${group.ai_message || "请稍后重试"}`)
       : group.ai_status === "done" ? (language === "en" ? `Review complete. ${group.checked_count || 0} candidates checked.` : `本组分析完成。已检查 ${group.checked_count || 0} 个候选。`)
       : verifiedFull ? tr("本组五个项目均已核实。")
-      : group.checked_count ? tr("可手动核实下一批候选，补齐符合条件的新项目。") : tr("当前为基础匹配；点击后才进行 AI 核实。");
+      : group.checked_count ? tr("可手动核实下一批候选，补齐符合条件的新项目。") : (language==='en'?'Basic matches; automatic AI discovery runs during data updates when enabled and connected.':'当前为基础匹配；开启自动 AI 发现且已连接时，数据更新会自动核实。');
     if (["running", "done", "error"].includes(group.ai_status)) {
       const announcement = language === "en" ? `Keyword “${group.term}”: ${status.textContent}` : `关键词「${group.term}」：${status.textContent}`;
       if (announcement !== lastAiAnnouncement) {
@@ -599,7 +599,7 @@ async function changeModel(event) {
     await post("/api/ai/model", {model_id: modelId});
     aiConnection.selected_model = modelId;
     await loadAIStatus();
-    byId("ai-live").textContent = tr(modelId ? "已切换 AI 模型；下次点击 AI 按钮时使用。" : "已切换为自动选择。");
+    byId("ai-live").textContent = tr(modelId ? "已切换 AI 模型；下次检索或项目理解时使用。" : "已切换为自动选择。");
     await loadIssue();
     if (detailRepoId && !byId("detail-view").hidden) await showDetail(detailRepoId);
   } catch (error) {
@@ -657,6 +657,8 @@ function renderIssue(issue) {
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
   const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 分批核实',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
   const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'AI checking',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>p.status==='running');
+  if(byId('search-cancel').hidden)byId('search-cancel').disabled=false;
   const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').map(p=>
     language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · collected ${p.collected}, checked ${p.newly_checked}, cache ${p.cache_hits}, pending ${p.pending}`:
     `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 收集 ${p.collected}，新核实 ${p.newly_checked}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
@@ -951,6 +953,24 @@ function renderAutoUpdate(state, updateControls = true) {
     : tr("还没有自动更新尝试");
 }
 
+let searchSettingsGeneration=0,searchSettingsSaving=false;
+async function loadSearchSettings(){
+  if(searchSettingsSaving)return;
+  const version=++searchSettingsGeneration;
+  try{const value=await api('/api/search/settings');if(version===searchSettingsGeneration)byId('search-ai-enabled').checked=value.enabled;}
+  catch(error){if(version===searchSettingsGeneration)byId('search-ai-feedback').textContent=error.message;}
+}
+byId('search-ai-enabled').addEventListener('change',async()=>{
+  const input=byId('search-ai-enabled'),version=++searchSettingsGeneration;input.disabled=true;searchSettingsSaving=true;
+  try{const value=await post('/api/search/settings',{enabled:input.checked});if(version!==searchSettingsGeneration)return;input.checked=value.enabled;byId('search-ai-feedback').textContent=tr('已保存自动 AI 设置。');}
+  catch(error){input.checked=!input.checked;byId('search-ai-feedback').textContent=error.message;}
+  finally{searchSettingsSaving=false;input.disabled=false;}
+});
+byId('search-cancel').addEventListener('click',async()=>{
+  const button=byId('search-cancel');button.disabled=true;
+  try{await post('/api/search/cancel',{});setStatus(tr('正在停止检索，已保存的结果保留。'));}
+  catch(error){setStatus(error.message,'error');button.disabled=false;}
+});
 async function loadAutoUpdate() {
   try { renderAutoUpdate(await api("/api/auto-update")); }
   catch (error) { autoUpdateFeedback(error.message, true); }
@@ -1115,6 +1135,7 @@ async function connectGitHub() {
 async function loadSettings(clearFeedback = true) {
   if (clearFeedback) settingsFeedback("");
   await loadAutoUpdate();
+  await loadSearchSettings();
   await loadGitHubAccount();
   try {
     const settings = await api("/api/settings");

@@ -6,8 +6,8 @@
 
 1. 星迹 · StarTrail 采用 Python 标准库后端、原生网页、SQLite 和默认浏览器，Windows x64 优先。内部包名、EXE、AppId、任务和数据标识继续兼容 GitHub Radar。
 2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。
-3. 运行版本 0.5.0，拟发布标签 v0.5.0-preview.1。新本机安装包已构建并隔离验收；GitHub 发布状态以实际 Release 为准，发布后在开发日志记录。
-4. 完整 556 项隔离回归通过，包含 Node 更新交互。独立复核发现的九类边界问题均补回归修复；额外补扩词失败公共路径。真实 AI 三次验收通过，观察到五次实际搜索事件。新冻结资源一致、双向离线翻译、本机 API 和退出通过；隔离中文路径真实安装、覆盖升级、完整备份、数据保留、快捷方式 ICO、备份拒绝停止覆盖通过。
+3. 运行版本 0.5.0，当前交付标签 v0.5.0-preview.2。新本机安装包已构建并隔离验收；GitHub 发布状态以实际 Release 为准，发布后在开发日志记录。
+4. 完整回归在统一日志记录；本次最终回归为 562 项，隔离检查通过，包含 Node 更新交互。独立复核发现的九类边界问题均补回归修复；额外补扩词失败公共路径。真实 AI 三次验收通过，观察到五次实际搜索事件。新冻结资源一致、双向离线翻译、本机 API 和退出通过；隔离中文路径真实安装、覆盖升级、完整备份、数据保留、快捷方式 ICO、备份拒绝停止覆盖通过。
 5. 正式用户数据未用于开发测试；真实 AI 验证严格三次，未执行自动二百候选验收。安装验收仅更换测试 AppId/注册键/快捷方式名，程序和备份逻辑未变，避免覆盖真实安装；第二台干净 Windows 和跨夜长期运行仍未验收。
 
 ## 2. 模块与运行链路
@@ -27,7 +27,7 @@
 Python 文件在 github_radar/，网页模块在 github_radar/web_assets/，安装器在 packaging/。旧 service/discovery/ranking 仍供未连接 AI 和兼容入口使用；不要删除旧路径或把网络请求重新塞进长事务。
 
 1. __main__ 组装服务和真实 GitHubClient；BrowserServer 安装 SearchJobs。立即更新、定时更新和 CLI 共用调度规则。
-2. 已连接 Codex 时，SearchJobs 串行处理增长及启用关键词；SearchCoordinator 扩词、主动搜索、多来源采集、官方解析、分批判断、排名、原子发布。未连接时使用公共 GitHub 路径并明确状态。
+2. 自动 AI 开关开启且已连接 Codex 时，SearchJobs 串行处理增长及启用关键词；SearchCoordinator 扩词、主动搜索、多来源采集、官方解析、分批判断、排名、原子发布。未连接或自动 AI 关闭时使用公共 GitHub 路径并明确状态。
 3. 界面切页、打开已缓存详情或关注文件夹不触发批量检索。项目 AI 解释为手动操作，自动候选核实不会替所有候选生成六卡详情。
 4. 入选项目后台预译；内容不变复用硬盘译文。详情需要的译文准备好后呈现，避免结束动画后替换文字。旧画面即时移除，新真实 DOM 约 350ms 渐显。
 5. 软件升级与“立即更新”数据刷新分开。匿名启动检测、六小时节流；发现匹配的新安装包和哈希后才提供软件更新入口。
@@ -59,7 +59,7 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 | GET /api/history、/api/history/calendar、/api/history/{date} | 查询/月份/日期 | 历史按保存日期读取 |
 | GET /api/repository/{id}/sources | 可带 date | 来源排名、官方日增、出处各自保存 |
 | /api/following、/api/folders 子路由 | 具体 move/classify 结构以 folder handler 为准 | 归类原子保存，多文件夹；创建并归类时失败全回滚 |
-| GET /api/software-update | status、release、can_install、error 等 | 六小时节流检测，源码模式可提示不能自动安装 |
+| GET /api/software-update | status、release、installable、error 等 | 六小时节流检测，源码模式可提示不能自动安装 |
 | POST /api/software-update/check | 空对象 | 显式重新检测，202；固定仓库无任意 URL 参数 |
 | POST /api/software-update/install | 仅 confirmed: true | 有活动写任务时 409；确认后下载校验，后台进度，准备好再启动安装器 |
 | README/翻译任务路由 | 正文、缓存和任务状态分开 | 不执行外部脚本、README 指令或 AI 返回命令 |
@@ -72,8 +72,9 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 1. `GET /api/search/keywords/{id}/expansion` 返回 `original`、`terms`、`topics`、`version`；尚无缓存时 terms/topics 为空。POST 同一路径只接受 `{"terms":["agent skills","智能体技能"]}`，最多六个，每个1～120字符；保留原关键词及已选主题，扩词哈希变化使旧发布失效。写入返回同一结构，未知关键词404，格式错误400；这是修改检索表达，不启动付费任务。
 2. `POST /api/following/{id}/classify` 严格接受 `{"ids":[1,2],"create_name":null}`，或带创建名称。成功返回 `followed:true`、最终 `ids` 和带 id/name/count 的 `folders`。已有关注允许空 ids 保存未分类；未关注且既不选文件夹也不创建则400，不暗中关注。重复名称400、不存在404、数据库/文件错误503，全部回滚。
 3. `POST /api/following/{id}/folders` 拖动请求为 `{"action":"move","source":"1","target":"2"}`；未分类用字符串 `unfiled`，数字文件夹 ID 也使用字符串。全部关注 `all` 不是合法来源/目标。来源归属已变化400，目标不存在404，成功返回最终 `ids`。旧的 `{"ids":[1]}` 设置分类和 `move_unfiled` 请求仍兼容。
-4. `GET /api/issue` 的 search_progress 含 module/day/job、status/stage、collected/unique/cache_hits/newly_checked/pending 和 expansion_calls/search_calls/judgment_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
-5. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；can_install 标明是否冻结安装版，downloaded/total 用于进度。
+4. `GET /api/issue` 的 search_progress 含 job_id/section/keyword_id/local_date、status/stage、collected/unique/cache_hits/newly_checked/pending 和 expansion_calls/search_calls/judgment_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
+5. `GET /api/search/settings` 返回 `{"enabled":true}`，缺省开启。POST 同路径严格接受布尔 `enabled`，短事务保存；关闭成功后取消当前 AI 检索。GET `/api/search/status` 返回本日 `jobs` 数组；POST `/api/search/cancel` 仅接受空对象，202 表示正在停止，不等于任务已退出。未知搜索路径404。自动关闭时数据刷新使用公共路径；显式手动继续仍可使用，模块之间停止返回部分完成及未执行说明。设置读取/保存以页面代次隔离，迟到 GET 不覆盖刚保存的额度选择。
+6. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；installable 标明是否冻结安装版，downloaded/total 用于进度。
 
 ## 5. 存储、失效和并发
 

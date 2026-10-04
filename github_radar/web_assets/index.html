@@ -157,11 +157,12 @@
         <p id="keyword-empty" class="empty-state" hidden></p>
         <p class="section-description" data-i18n="符合你关注的方向，并达到 Star 门槛的项目。当天名单保持稳定。">符合你关注的方向，并达到 Star 门槛的项目。当天名单保持稳定。</p>
         <div class="keyword-ai-notes">
-          <p id="ai-usage-note" data-i18n="点击 AI 按钮后，会把关键词及公开的 GitHub 项目资料发送给 Codex，并消耗账号使用额度。" class="field-hint">点击 AI 按钮后，会把关键词及公开的 GitHub 项目资料发送给 Codex，并消耗账号使用额度。</p>
           <p id="ai-live" class="ai-live" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
       </section>
-      <p id="issue-notes" class="issue-notes"></p>
+          <p id="ai-usage-note" data-i18n="开启自动 AI 发现并连接 Codex 后，数据更新会自动检索和核实，使用账号额度；项目理解仍需手动生成。" class="field-hint">开启自动 AI 发现并连接 Codex 后，数据更新会自动检索和核实，使用账号额度；项目理解仍需手动生成。</p>
+      <button id="search-cancel" class="button button-quiet" type="button" data-i18n="停止本次检索" hidden>停止本次检索</button>
+        <p id="issue-notes" class="issue-notes"></p>
     </main>
 
     <main tabindex="-1" id="history-view" class="secondary-view" hidden>
@@ -248,7 +249,10 @@
       </section>
       <section class="settings-section auto-update-section" aria-labelledby="auto-update-title">
         <h2 id="auto-update-title" data-i18n="每日更新">每日更新</h2>
-        <p class="section-description" data-i18n="电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；AI 仍由你点击后运行。">电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；AI 仍由你点击后运行。</p>
+        <p class="section-description" data-i18n="电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；自动 AI 发现由下方开关控制。">电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；自动 AI 发现由下方开关控制。</p>
+        <label class="auto-update-switch" for="search-ai-enabled"><input id="search-ai-enabled" type="checkbox"><span data-i18n="自动 AI 发现">自动 AI 发现</span></label>
+        <p class="field-hint" data-i18n="开启后，数据更新自动扩词、联网搜索和分批核实，使用 Codex 账号额度；关闭后使用公共检索，手动 AI 操作仍可使用。">开启后，数据更新自动扩词、联网搜索和分批核实，使用 Codex 账号额度；关闭后使用公共检索，手动 AI 操作仍可使用。</p>
+        <p id="search-ai-feedback" class="form-feedback" role="status" aria-live="polite"></p>
         <form id="auto-update-form" class="auto-update-form">
           <label class="auto-update-switch" for="auto-update-enabled">
             <input id="auto-update-enabled" type="checkbox">
