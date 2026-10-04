@@ -13,6 +13,7 @@ let homeScroll = 0;
 let pollTimer = null;
 let savedIssueTimer = null;
 let quitting = false;
+const softwareUpdates=window.RadarSoftwareUpdate?.create({byId,api,post,tr,reveal:node=>cardTransition.reveal(node),remember:sessionStorage});
 let didInitialRefresh = false;
 let aiConnection = {ready: false, reason: "正在检查 AI 连接…", models: [], selected_model: null};
 let aiPollTimer = null;
@@ -396,7 +397,16 @@ function renderKeywordGroups(issue) {
       const button = element("button", "button button-quiet ai-refine-button");
       button.type = "button";
       button.addEventListener("click", () => startRefine(group.keyword_id));
-      heading.append(title, count, button);
+      const expansion=element('details','keyword-expansion');
+      const summary=element('summary','',language==='en'?'Search terms':'查看／纠正扩展词');
+      const terms=element('textarea','');terms.rows=2;terms.maxLength=726;
+      terms.setAttribute('aria-label',language==='en'?'Expanded terms, one per line':'扩展词，每行一个，最多6个');
+      const save=element('button','button button-quiet',language==='en'?'Save terms':'保存扩词');save.type='button';
+      const feedback=element('p','field-hint');
+      summary.addEventListener('click',async()=>{if(expansion.open)return;try{const value=await api(`/api/search/keywords/${group.keyword_id}/expansion`);terms.value=value.terms.join('\n');feedback.textContent=value.topics.join(' · ');}catch(error){feedback.textContent=error.message;}});
+      save.addEventListener('click',async()=>{save.disabled=true;try{await post(`/api/search/keywords/${group.keyword_id}/expansion`,{terms:terms.value.split('\n').map(t=>t.trim()).filter(Boolean)});feedback.textContent=language==='en'?'Saved; used on the next update.':'已保存，下次更新使用。';}catch(error){feedback.textContent=error.message;}finally{save.disabled=false;}});
+      expansion.append(summary,terms,save,feedback);
+      heading.append(title, count, button, expansion);
       const status = element("p", "ai-group-status");
       status.setAttribute("tabindex", "-1");
       const cards = element("div", "card-grid");
@@ -419,7 +429,7 @@ function renderKeywordGroups(issue) {
       : `${(group.cards || []).length} / 5 个项目 · 已检查 ${group.checked_count || 0} 个候选`;
     const verifiedFull = (group.cards || []).length >= 5
       && (group.cards || []).every(card => card.ai_status === "relevant");
-    button.hidden = verifiedFull;
+    button.hidden = verifiedFull && !(group.search_progress?.pending);
     button.textContent = tr((group.cards || []).length >= 5 ? "AI 核实" : "AI 核实并补齐");
     button.disabled = !aiConnection.ready || issue.busy || issue.ai_busy || quitting
       || verifiedFull;
@@ -645,7 +655,12 @@ function renderIssue(issue) {
   for (const group of issue.keyword_groups || [])
     if (group.cards.length < 5) shortage.push(language === "en"
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
-  byId("issue-notes").textContent = [...new Set([...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
+  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 分批核实',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'AI checking',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').map(p=>
+    language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · collected ${p.collected}, checked ${p.newly_checked}, cache ${p.cache_hits}, pending ${p.pending}`:
+    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 收集 ${p.collected}，新核实 ${p.newly_checked}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
+  byId("issue-notes").textContent = [...new Set([...progress,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
   if (pollTimer) clearTimeout(pollTimer);
   if (busy && !quitting) pollTimer = setTimeout(loadIssue, 1200);
   translatePage();
@@ -728,12 +743,21 @@ function clearAIExplanation() {
   byId("detail-ai-explain").textContent = tr("生成项目理解");
 }
 
+let currentProjectKind=null;
+function renderProjectKind(){
+  const root=byId('readme-purpose');root.querySelector('.project-kind')?.remove();
+  if(!detailHasAnalysis)return;
+  const text=currentProjectKind?(currentProjectKind[language]||currentProjectKind.zh):tr('旧解读尚未注明类型，可更新解读补充。');
+  const paragraph=element('p','project-kind'),strong=element('strong','',text);
+  paragraph.setAttribute('data-translation-literal','');paragraph.append(strong);root.prepend(paragraph);
+}
 function renderAIExplanation(detail, prepared=null) {
   const saved = detail.ai_explanation;
   const contentKey=JSON.stringify([detail.repo_id,language,saved]);
   const changed=contentKey!==detailAIContentKey;
   if(changed){clearAIExplanation();detailAIContentKey=contentKey;}
   detailHasAnalysis=Boolean(saved);detailAnalysisStale=Boolean(detail.analysis_stale);
+  currentProjectKind=saved?.project_kind||null;renderProjectKind();
   byId("detail-ai-explain").textContent = tr(saved ? "重新生成项目理解" : "生成项目理解");
   const insight = saved && (saved[language] || saved.zh);
   if (insight) {
@@ -891,32 +915,7 @@ async function submitHistory(event){
 async function clearHistory(){historyInputs({});return submitHistory({preventDefault(){}});}
 
 async function loadFollowing(){return followingBoard.load();}
-function renderFolderChoices(){clear(byId('detail-folder-choices'));
-  for(const folder of folderSelection.folders()){
-    const label=element('label','folder-choice'),input=element('input');input.type='checkbox';input.checked=folderSelection.ids().includes(folder.id);
-    input.addEventListener('change',()=>folderSelection.select(folder.id,input.checked));label.append(input,element('span','',folder.name));byId('detail-folder-choices').append(label);
-  }
-}
-async function loadDetailFolders(repoId,followed){
-  const version=++folderGeneration;folderSelection.unfollow();byId('detail-folders').hidden=!followed;
-  byId('detail-folder-feedback').textContent='';clear(byId('detail-folder-choices'));byId('detail-folder-save').disabled=true;
-  if(!followed)return;
-  try{const data=await api('/api/following/'+encodeURIComponent(repoId)+'/folders');
-    if(version!==folderGeneration||detailRepoId!==repoId)return;
-    folderSelection.load(repoId,data.ids||[],data.folders||[]);renderFolderChoices();byId('detail-folder-save').disabled=false;
-  }catch(error){if(version===folderGeneration){byId('detail-folder-feedback').textContent=error.message;
-    const retry=element('button','button button-quiet',tr('重试'));retry.type='button';retry.addEventListener('click',()=>loadDetailFolders(repoId,true));byId('detail-folder-feedback').append(retry);}}
-}
-async function saveDetailFolders(event){event.preventDefault();const version=folderGeneration,button=byId('detail-folder-save');button.disabled=true;
-  try{if(await folderSelection.save()&&version===folderGeneration)byId('detail-folder-feedback').textContent=tr('已保存。');}
-  catch(error){if(version===folderGeneration)byId('detail-folder-feedback').textContent=error.message;}
-  finally{if(version===folderGeneration)button.disabled=false;}
-}
-async function createDetailFolder(event){event.preventDefault();const version=folderGeneration,input=byId('detail-folder-name'),button=byId('detail-folder-create-form').querySelector('button');button.disabled=true;
-  try{const folder=await folderSelection.create(input.value);if(folder&&version===folderGeneration){input.value='';renderFolderChoices();byId('detail-folder-feedback').textContent=tr('已创建并选中，请保存分类。');}}
-  catch(error){if(version===folderGeneration)byId('detail-folder-feedback').textContent=error.message;}
-  finally{button.disabled=false;}
-}
+async function loadDetailFolders(){classificationEditor.invalidate();}
 
 function settingsFeedback(message, error = false) {
   const feedback = byId("settings-feedback");
@@ -1257,6 +1256,7 @@ function renderReadme(view,prepared=null) {
   readmeRenderedKey=key;
   if(prepared)translationController.adopt(prepared,byId('readme-purpose'));else fillReadmePurpose(byId('readme-purpose'),view,base);
   }
+  renderProjectKind();
   if(view.status==='ready'&&view.document?.truncated)byId('readme-status').textContent=tr('README 超出读取上限，仅展示已读取部分。');
   translatePage();
 }
@@ -1304,7 +1304,7 @@ async function showDetail(repoId,{preserveFolders=false}={}) {
   byId('detail-tools').hidden=false;
   renderReadme({status:'empty', sections:[], selected_markdown:'', document:null});
   detailRepoId = repoId;
-  if(!preserveFolders){folderGeneration++;folderSelection.unfollow();byId('detail-folders').hidden=true;}
+  if(!preserveFolders){folderGeneration++;folderSelection.unfollow();classificationEditor.invalidate();}
   loadAIStatus();
   if (detailPollTimer) clearTimeout(detailPollTimer);
   for (const id of ["home-view", "history-view", "following-view", "settings-view"])
@@ -1461,6 +1461,7 @@ function navLink(event) {
 async function quitApp() {
   if (quitting || !window.confirm(tr("退出 StarTrail？正在运行的 AI 分析会停止，数据更新会先完成。"))) return;
   quitting = true;
+  softwareUpdates?.close();
   translationController.close();
   cancelReadmePolling();
   byId("quit-button").disabled = true;
@@ -1565,8 +1566,10 @@ byId('history-clear').addEventListener('click',clearHistory);
 byId('history-calendar-back').addEventListener('click',navLink);
 byId('history-more').addEventListener('click',async()=>{const button=byId('history-more');button.disabled=true;
   try{await historySearch.more();}catch(error){byId('history-status').textContent=error.message;}finally{button.disabled=false;}});
-byId('detail-folder-form').addEventListener('submit',saveDetailFolders);
-byId('detail-folder-create-form').addEventListener('submit',createDetailFolder);
+const classificationEditor=window.RadarDetailClassification.create({byId,api,post,element,tr,
+  current:()=>location.pathname===`/project/${detailRepoId}`?detailRepoId:null,
+  onSaved(id){if(detailRepoId!==id)return;byId('follow-button').setAttribute('aria-pressed','true');byId('follow-button').textContent=tr('已关注');}});
+byId('detail-classify').addEventListener('click',()=>{if(detailRepoId)return classificationEditor.open(detailRepoId,byId('follow-button').getAttribute('aria-pressed')==='true');});
 for (const id of ["nav-home", "nav-history", "nav-following", "nav-settings"])
   byId(id).addEventListener("click", navLink);
 window.addEventListener("popstate", ()=>transitionPage(()=>route({transition:true}),{reverse:true}));
@@ -1634,6 +1637,7 @@ if (document.addEventListener) {
 if (!token) setStatus(tr("页面缺少本次运行凭证。请重新打开 StarTrail。"), "error");
 else loadPreferences().then(() => {
   route();
+  softwareUpdates?.start();
   loadIssue();
   savedIssueTimer = setTimeout(pollSavedIssue, 60000);
 });

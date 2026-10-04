@@ -71,7 +71,7 @@ def explanation():
               "highlights": ["Local use"]}
     return json.dumps({"zh": {**fields, "summary": "一句话简介"}, "en": fields,
                        "relevance": "relevant", "evidence": ["README states local use"],
-                       "source_limited": False})
+                       "source_limited": False,"project_kind":{"primary":"software","secondary":[],"zh":"这是一个软件。","en":"This is software.","evidence":["README"],"uncertain":False}})
 
 
 class CodexProviderTests(unittest.TestCase):
@@ -97,7 +97,7 @@ class CodexProviderTests(unittest.TestCase):
         result,_ = self.run_with_response(json.dumps(payload),lambda p:p.explain(entry(11),'local ai',None))
         self.assertEqual(result.en.problem,'Solves local tooling setup.')
         self.assertEqual(result.en.prerequisites,'Requires Python.')
-        self.assertEqual(result.schema_version,2)
+        self.assertEqual(result.schema_version,3)
 
     def run_with_response(self, response, action):
         made = []

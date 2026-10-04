@@ -44,6 +44,7 @@ class RadarService:
         self.store = store
         self.trending = trending
         self.clock = clock
+        self.search_jobs = None
         self.discovery = discovery or (DiscoveryCoordinator(client, store, clock=clock)
                                        if isinstance(client, GitHubClient) else None)
 
@@ -65,6 +66,9 @@ class RadarService:
         )
 
     def refresh(self, local_date: str, observed_at: str) -> RefreshResult:
+        if self.search_jobs is not None:
+            result=self.search_jobs.refresh(local_date,observed_at)
+            if result is not None:return result
         if self.discovery is not None:
             prior_budget = getattr(self.client,"budget",None)
             prior_clock = getattr(self.client,"clock",None)

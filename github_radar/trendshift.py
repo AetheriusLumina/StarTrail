@@ -129,11 +129,15 @@ class TrendshiftClient:
                 batches.append(DiscoveryBatch(source, (), None, False, (str(exc),)))
         return tuple(batches)
 
-    def topic(self, term: str, observed_at: str) -> DiscoveryBatch:
-        if self._directory is None:
+    def topics(self,*,refresh=False):
+        if refresh or self._directory is None:
             page = PublicPage();page.feed(self._read(BASE + "/topics"))
             self._directory = {label.lstrip("#").strip().casefold(): href for href, label in page.links
                                if re.fullmatch(r"/topics/[a-z0-9-]+", href)}
+        return tuple(sorted(self._directory))
+
+    def topic(self, term: str, observed_at: str) -> DiscoveryBatch:
+        self.topics()
         href = self._directory.get(term.strip().casefold())
         if href is None:
             return DiscoveryBatch("trendshift_topic", (), None, False, ("未找到明确匹配的公开主题",))

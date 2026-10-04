@@ -148,7 +148,7 @@ class AIService:
             "repo_id": repo_id, "keyword": keyword,
             "description": repository.description, "topics": repository.topics,
             "language": repository.language, "readme_excerpt": excerpt,
-            "schema_version":2,"readme_hash":document.content_hash if document else None,
+            "schema_version":3,"readme_hash":document.content_hash if document else None,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         cached = self.store.load_explanation(repo_id, keyword_id, model_id, version)
         if cached is not None and not force:

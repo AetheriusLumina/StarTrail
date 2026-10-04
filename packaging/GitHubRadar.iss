@@ -1,4 +1,4 @@
-#define AppVersion "0.4.0"
+#define AppVersion "0.5.0"
 
 [Setup]
 AppId=GitHubRadar
@@ -43,6 +43,10 @@ zh.UpgradeStopped=升级准备未完成，个人数据未被覆盖。请查看�
 en.UpgradeStopped=Upgrade preparation did not finish. Your personal data was not overwritten. Check the cause and try again.
 zh.UninstallLinkFailed=未能记录此安装的卸载入口。可从 Windows“已安装的应用”卸载；请检查安装文件夹的写入权限。
 en.UninstallLinkFailed=Could not record this installation's uninstall entry. You can uninstall from Windows Installed apps; check write access to the install folder.
+zh.BackupFailed=更新前的数据备份未完成，安装已停止，原数据与软件未被覆盖。请检查磁盘空间和 UserData 权限。
+en.BackupFailed=The data backup did not finish. Installation stopped before replacing the app or data. Check disk space and UserData permissions.
+zh.UpdateTitle=更新 StarTrail（保留原数据）
+en.UpdateTitle=Update StarTrail (keep existing data)
 zh.ErrorDetails=具体原因请打开这个文本文件：
 en.ErrorDetails=Open this text file for the specific cause:
 
@@ -60,8 +64,8 @@ Source: "{#SourcePath}\AppFiles\*"; DestDir: "{app}\AppFiles"; Flags: ignorevers
 Type: files; Name: "{app}\AppFiles\github-radar-uninstaller.txt"
 
 [Icons]
-Name: "{code:StartMenuShortcutPath}\StarTrail"; Filename: "{app}\GitHubRadar.exe"
-Name: "{code:DesktopShortcutPath}\StarTrail"; Filename: "{app}\GitHubRadar.exe"
+Name: "{code:StartMenuShortcutPath}\StarTrail"; Filename: "{app}\GitHubRadar.exe"; IconFilename: "{app}\AppFiles\github_radar\web_assets\startrail.ico"
+Name: "{code:DesktopShortcutPath}\StarTrail"; Filename: "{app}\GitHubRadar.exe"; IconFilename: "{app}\AppFiles\github_radar\web_assets\startrail.ico"
 
 [Run]
 Filename: "{app}\GitHubRadar.exe"; Description: "{cm:LaunchProgram,StarTrail}"; Flags: nowait postinstall skipifsilent
@@ -72,6 +76,10 @@ var
   DeleteData: Boolean;
   MaintenanceHandle: Longint;
   MaintenancePath: String;
+  LastBackup: String;
+
+function FileAttributes(Name: String): DWORD;
+  external 'GetFileAttributesW@kernel32.dll stdcall';
 
 function OpenMaintenanceFile(Name: String; Access, Share: DWORD;
   Security: Longint; Creation, Attributes: DWORD; Template: Longint): Longint;
@@ -266,7 +274,10 @@ begin
        HasRecordedUninstaller(CandidateRoot) then
       PreviousRoot := CandidateRoot;
   end;
-  if PreviousRoot <> '' then WizardForm.DirEdit.Text := PreviousRoot;
+  if PreviousRoot <> '' then begin
+    WizardForm.DirEdit.Text := PreviousRoot;
+    WizardForm.Caption := ExpandConstant('{cm:UpdateTitle}');
+  end;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -299,6 +310,64 @@ begin
   end;
 end;
 
+function CopyDataTree(Source, Target: String; TopLevel: Boolean): Boolean;
+var
+  Item: TFindRec;
+  ChildSource, ChildTarget: String;
+begin
+  Result := False;
+  { Do not follow junctions/symlinks into other folders or back into backups. }
+  if (FileAttributes(Source) and $400) <> 0 then Exit;
+  if not ForceDirectories(Target) then Exit;
+  if not FindFirst(AddBackslash(Source) + '*', Item) then begin
+    Result := True;
+    Exit;
+  end;
+  try
+    repeat
+      if (Item.Name <> '.') and (Item.Name <> '..') and
+         not (TopLevel and ((CompareText(Item.Name, 'Backups') = 0) or
+                            (CompareText(Item.Name, '.software-updates') = 0))) then begin
+        ChildSource := AddBackslash(Source) + Item.Name;
+        ChildTarget := AddBackslash(Target) + Item.Name;
+        if (Item.Attributes and $400) <> 0 then Exit;
+        if (Item.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then begin
+          if not CopyDataTree(ChildSource, ChildTarget, False) then Exit;
+        end else if not FileCopy(ChildSource, ChildTarget, True) then Exit;
+      end;
+    until not FindNext(Item);
+    Result := True;
+  finally
+    FindClose(Item);
+  end;
+end;
+
+function BackupExistingData(Root: String): Boolean;
+var
+  DataRoot, BackupRoot, Destination, Stamp: String;
+  Number: Integer;
+begin
+  Result := False;
+  DataRoot := AddBackslash(Root) + 'UserData';
+  if not DirExists(DataRoot) then begin Result := True; Exit; end;
+  if (FileAttributes(DataRoot) and $400) <> 0 then Exit;
+  BackupRoot := AddBackslash(DataRoot) + 'Backups';
+  if DirExists(BackupRoot) and ((FileAttributes(BackupRoot) and $400) <> 0) then Exit;
+  Stamp := GetDateTimeString('yyyymmdd-hhnnss', '-', ':');
+  Destination := AddBackslash(BackupRoot) + 'pre-update-' + Stamp;
+  Number := 0;
+  while DirExists(Destination) do begin
+    Number := Number + 1;
+    Destination := AddBackslash(BackupRoot) + 'pre-update-' + Stamp + '-' + IntToStr(Number);
+  end;
+  { The exclusive maintenance reservation guarantees all SQLite writers stopped. }
+  if not CopyDataTree(DataRoot, Destination, True) then Exit;
+  if not SaveStringToFile(AddBackslash(Destination) + 'BACKUP_COMPLETE.txt',
+                         'StarTrail user-data backup before application update.', False) then Exit;
+  LastBackup := Destination;
+  Result := True;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   ReleaseMaintenance;
@@ -323,6 +392,11 @@ begin
     ReleaseMaintenance;
     Result := WithErrorFile(ExpandConstant('{cm:UpgradeStopped}'),
                             AddBackslash(WizardDirValue) + 'UserData');
+    Exit;
+  end;
+  if not BackupExistingData(WizardDirValue) then begin
+    ReleaseMaintenance;
+    Result := ExpandConstant('{cm:BackupFailed}');
   end;
 end;
 

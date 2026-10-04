@@ -24,7 +24,10 @@ class FakeNode {
   }
   get firstChild() { return this.children[0] || null; }
   get pathname() { return this.href ? new URL(this.href, "http://127.0.0.1:12345").pathname : ""; }
-  append(...items) { this.children.push(...items); }
+  append(...items) { for(const item of items)item.parentNode=this; this.children.push(...items); }
+  prepend(item){item.parentNode=this;this.children.unshift(item);}
+  remove(){this.parentNode?.removeChild(this);}
+  replaceChildren(...items){this.children=[];this.append(...items);}
   removeChild(item) { this.children.splice(this.children.indexOf(item), 1); }
   addEventListener(name, callback) { this.listeners.set(name, callback); }
   setAttribute(name, value) { this[name] = value; }
@@ -186,6 +189,7 @@ function scenario({ detail = false, initialPath = null, queuedFrames = false, re
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../github_radar/web_assets/history_calendar.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../github_radar/web_assets/following_board.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../github_radar/web_assets/card_transition.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../github_radar/web_assets/detail_classification.js'),'utf8'),context);
   vm.runInContext(appSource, context);
   return {
     node, context,
@@ -657,7 +661,8 @@ async function testDetailToolsWithoutRemovedModules() {
   assert.ok(!app.node('detail-metrics').children.some(n=>n.textContent.includes('GitHub 统计日')),'The removed statistical-date text stays out of project details too');
   app.context.author={status:'ready',document:{source_url:'https://github.com/owner/repo#readme',observed_at:'today'},sections:[{kind:'purpose',text:'Original author purpose'}]};
   vm.runInContext('renderReadme(author)',app.context);
-  assert.equal(app.node('readme-purpose').children.length,1);
+  assert.equal(app.node('readme-purpose').children.length,2);
+  assert.equal(app.node('readme-purpose').children[0].className,'project-kind','Type is the first purpose line');
   assert.equal(app.node('readme-status').textContent,'','A ready README is not a read-failure');
   assert.ok(!app.requests().some(p=>p.includes('/api/ai/projects/')),'Opening a detail never calls AI');
   await app.node('detail-ai-explain').listeners.get('click')();
@@ -908,33 +913,37 @@ async function testFilteredHistoryReturnAndFolderControls() {
   assert.ok(app.node('following-folders').children.some(n=>n.textContent.includes('未分类')),'Unfiled selector exists');
   assert.equal(typeof app.node('folder-editor-form').listeners.get('submit'),'function');
   const detail=scenario({detail:true});await flush();await detail.node('follow-button').listeners.get('click')();
-  assert.equal(detail.node('detail-folders').hidden,false,'Following reveals multi-folder editor');
-  assert.equal(typeof detail.node('detail-folder-form').listeners.get('submit'),'function');
+  assert.equal(typeof detail.node('detail-classify').listeners.get('click'),'function');
+  assert.equal(typeof detail.node('classification-form').listeners.get('submit'),'function');
 }
 
+async function testClassificationLoadFailureCannotClearMemberships(){
+  const app=scenario({detail:true});await flush();
+  await app.node('follow-button').listeners.get('click')();
+  app.backend(async route=>route==='/api/following/1/folders'?{ok:false,status:503,json:async()=>({error:'load failed'})}:null);
+  await app.node('detail-classify').listeners.get('click')();
+  assert.equal(app.node('classification-save').disabled,true,'Failed load must not expose an empty replacement selection');
+  assert.match(app.node('classification-status').textContent,/load failed/);
+}
 async function testFolderFailureRetentionAndLanguageDrafts(){
   const app=scenario({detail:true});await flush();let fail=false;
   const ok=data=>({ok:true,status:200,json:async()=>data});
   app.backend(async(route,options)=>{
-    if(route==='/api/following/1/folders')return options.method==='POST'?
-      fail?{ok:false,status:503,json:async()=>({error:'disk full'})}:ok({ids:JSON.parse(options.body).ids}):
-      ok({ids:[1],folders:[{id:1,name:'中文 %_'},{id:2,name:'Project 中文'}]});
-    if(route==='/api/folders')return fail?{ok:false,status:503,json:async()=>({error:'disk full'})}:ok({folder:{id:3,name:JSON.parse(options.body).name}});
+    if(route==='/api/following/1/folders')return ok({ids:[1],folders:[{id:1,name:'中文 %_'},{id:2,name:'Project 中文'}]});
+    if(route==='/api/following/1/classify')return fail?{ok:false,status:503,json:async()=>({error:'disk full'})}:ok({followed:true,ids:JSON.parse(options.body).ids});
     return null;
   });
   await app.node('follow-button').listeners.get('click')();
-  const labels=app.node('detail-folder-choices').children;
+  await app.node('detail-classify').listeners.get('click')();
+  const labels=app.node('classification-choices').children;
   assert.equal(labels[0].children[1].textContent,'中文 %_');assert.equal(labels[0].children[1].getAttribute('data-translate'),undefined);
   labels[1].children[0].checked=true;labels[1].children[0].listeners.get('change')();
-  fail=true;await app.node('detail-folder-form').listeners.get('submit')({preventDefault(){}});
-  assert.match(app.node('detail-folder-feedback').textContent,/disk full/);assert.equal(labels[1].children[0].checked,true);
-  assert.equal(vm.runInContext('folderSelection.saved().length',app.context),1);
-  app.node('detail-folder-name').value='New 中文';await app.node('detail-folder-create-form').listeners.get('submit')({preventDefault(){}});
-  assert.equal(app.node('detail-folder-name').value,'New 中文');
-  fail=false;await app.node('detail-folder-create-form').listeners.get('submit')({preventDefault(){}});
-  assert.equal(app.node('detail-folder-choices').children.at(-1).children[0].checked,true);
-  await app.node('detail-folder-form').listeners.get('submit')({preventDefault(){}});
-  assert.equal(vm.runInContext('folderSelection.saved().length',app.context),3);
+  app.node('classification-name').value='New 中文';
+  fail=true;await app.node('classification-form').listeners.get('submit')({preventDefault(){}});
+  assert.match(app.node('classification-status').textContent,/disk full/);assert.equal(labels[1].children[0].checked,true);
+  assert.equal(app.node('classification-name').value,'New 中文');
+  fail=false;await app.node('classification-form').listeners.get('submit')({preventDefault(){}});
+  assert.equal(app.node('classification-dialog').open,false);
   const history=scenario({initialPath:'/history'});await flush();history.node('history-query').value='未提交 中文';
   await vm.runInContext("setLanguage('en')",history.context);
   assert.equal(history.node('history-query').value,'未提交 中文','Language change must keep typed query');
@@ -957,11 +966,11 @@ async function testEditsDuringPendingLanguageChange(){
   const detail=scenario({detail:true});await flush();
   const ok=data=>({ok:true,status:200,json:async()=>data});
   detail.backend(async route=>route==='/api/following/1/folders'?ok({ids:[1],folders:[{id:1,name:'A'},{id:2,name:'B'}]}):null);
-  await detail.node('follow-button').listeners.get('click')();detail.delayNextPreference();
+  await detail.node('follow-button').listeners.get('click')();await detail.node('detail-classify').listeners.get('click')();detail.delayNextPreference();
   const change=vm.runInContext("setLanguage('en')",detail.context);await flush();
-  const checkbox=detail.node('detail-folder-choices').children[1].children[0];checkbox.checked=true;checkbox.listeners.get('change')();
+  const checkbox=detail.node('classification-choices').children[1].children[0];checkbox.checked=true;checkbox.listeners.get('change')();
   detail.releasePreference();await change;
-  assert.equal(vm.runInContext('folderSelection.ids().includes(2)',detail.context),true,'Late folder choices are not overwritten');
+  assert.equal(checkbox.checked,true,'Late folder choices are not overwritten');
 }
 
 async function testSharedExpansionRouteWiring(){
@@ -1097,6 +1106,7 @@ async function testMainPageTransitionsAndSavedKeywordSwitch(){
   await testCalendarLateResponsesCannotReplaceCurrentMonthOrDay();
   await testFollowingDragBlocksDetailUntilNextGesture();
   await testFilteredHistoryReturnAndFolderControls();
+  await testClassificationLoadFailureCannotClearMemberships();
   await testFolderFailureRetentionAndLanguageDrafts();
   await testHistoryNavigationQueryIdentity();
   await testEditsDuringPendingLanguageChange();

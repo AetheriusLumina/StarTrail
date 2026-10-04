@@ -13,10 +13,29 @@
   <script src="/assets/history_calendar.js" defer></script>
   <script src="/assets/following_board.js" defer></script>
   <script src="/assets/card_transition.js" defer></script>
+  <script src="/assets/detail_classification.js" defer></script>
+  <script src="/assets/software_update_ui.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
   <div class="page-glow" aria-hidden="true"></div>
+  <aside id="software-update-toast" class="software-update-toast" role="status" aria-live="polite" hidden>
+    <span id="software-update-toast-text" data-translation-literal></span>
+    <button id="software-update-toast-close" class="button button-quiet" type="button" aria-label="关闭更新提示" data-i18n="关闭">关闭</button>
+  </aside>
+  <dialog id="software-update-dialog" class="folder-dialog software-update-dialog" aria-labelledby="software-update-title">
+    <h2 id="software-update-title" data-i18n="软件更新">软件更新</h2>
+    <p id="software-update-version" data-translation-literal></p>
+    <p data-i18n="安装程序会备份并保留原数据，然后更新软件。下载及校验完成后，当前程序会退出；在安装程序中确认即可继续。">安装程序会备份并保留原数据，然后更新软件。下载及校验完成后，当前程序会退出；在安装程序中确认即可继续。</p>
+    <pre id="software-update-notes" data-translation-literal></pre>
+    <p id="software-update-message" role="status" aria-live="polite" data-translation-literal></p>
+    <p id="software-update-progress" data-translation-literal></p>
+    <a id="software-release-link" target="_blank" rel="noopener noreferrer" data-i18n="查看发布页" hidden>查看发布页</a>
+    <div class="form-actions">
+      <button id="software-update-dialog-close" class="button button-quiet" type="button" data-i18n="取消">取消</button>
+      <button id="software-update-install" class="button button-primary" type="button" data-i18n="下载并更新" disabled>下载并更新</button>
+    </div>
+  </dialog>
   <a href="#home-view" id="skip-content" class="skip-content" data-i18n="跳到主要内容">跳到主要内容</a>
   <div class="app-shell">
     <aside id="sidebar" class="sidebar" aria-label="StarTrail 导航">
@@ -37,6 +56,7 @@
           <span id="translation-status" role="status" aria-live="polite">本地机器翻译</span>
         </div>
         <button id="refresh-button" data-i18n="立即更新" class="button button-primary" type="button">立即更新</button>
+        <button id="software-update-button" class="button button-quiet" type="button" hidden>软件更新</button>
         <p id="update-status" class="field-hint" role="status" aria-live="polite" data-translation-literal hidden></p>
       </div>
       <section id="detail-tools" class="detail-tools" aria-label="项目操作" hidden>
@@ -49,13 +69,7 @@
           <p id="detail-ai-usage" data-i18n="点击后会把这个项目的公开 GitHub 资料发送给 Codex，并消耗账号使用额度。" class="field-hint">点击后会把这个项目的公开 GitHub 资料发送给 Codex，并消耗账号使用额度。</p>
           <p id="detail-ai-status" class="ai-result-status" role="status" aria-live="polite"></p>
           <p id="readme-status" role="status" aria-live="polite"></p>
-        <details id="detail-folders" class="detail-folder-tools" hidden>
-          <summary data-i18n="整理到文件夹">整理到文件夹</summary>
-          <p class="field-hint" data-i18n="可同时选择多个文件夹；全部取消则保留在未分类。">可同时选择多个文件夹；全部取消则保留在未分类。</p>
-          <form id="detail-folder-form"><div id="detail-folder-choices" class="folder-choices"></div><button id="detail-folder-save" class="button button-quiet" type="submit" data-i18n="保存分类">保存分类</button></form>
-          <form id="detail-folder-create-form" class="input-row"><label for="detail-folder-name" data-i18n="文件夹名称">文件夹名称</label><input id="detail-folder-name" maxlength="40" required><button class="button button-quiet" type="submit" data-i18n="创建并选中">创建并选中</button></form>
-          <p id="detail-folder-feedback" class="form-feedback" role="status" aria-live="polite"></p>
-        </details>
+
       </section>
       <div class="sidebar-actions">
         <button id="language-toggle" class="button button-quiet" type="button" aria-label="Switch language">English</button>
@@ -297,6 +311,7 @@
           <div id="detail-actions" class="detail-header-actions">
             <a id="github-link" class="button button-quiet" target="_blank" rel="noopener noreferrer" data-i18n="查看仓库" hidden>查看仓库</a>
             <button id="readme-refresh" class="button button-quiet" type="button" data-i18n="更新 README">更新 README</button>
+            <button id="detail-classify" class="button button-quiet" type="button" data-i18n="归类">归类</button>
             <button id="follow-button" data-i18n="关注" class="button button-quiet" type="button">关注</button>
           </div>
         </div>
@@ -321,6 +336,16 @@
       </article>
     </main>
 
+    <dialog id="classification-dialog" class="folder-dialog classification-dialog" aria-labelledby="classification-title">
+      <form id="classification-form">
+        <h2 id="classification-title" data-i18n="归类">归类</h2>
+        <div id="classification-choices" class="folder-choices"></div>
+        <label for="classification-name" data-i18n="创建文件夹并归类">创建文件夹并归类</label>
+        <input id="classification-name" maxlength="40" autocomplete="off">
+        <p id="classification-status" class="form-feedback" role="status" aria-live="polite"></p>
+        <div class="form-actions"><button id="classification-cancel" class="button button-quiet" type="button" data-i18n="取消">取消</button><button id="classification-save" class="button button-primary" type="submit" data-i18n="保存分类">保存分类</button></div>
+      </form>
+    </dialog>
     <footer class="site-footer"><span>StarTrail</span><span aria-hidden="true">·</span><span data-i18n="数据保存在这台电脑上">数据保存在这台电脑上</span></footer>
     </div>
   </div>

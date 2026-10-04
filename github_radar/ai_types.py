@@ -33,6 +33,16 @@ class InsightText:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectKind:
+    primary: str
+    secondary: tuple[str,...]
+    zh: str
+    en: str
+    evidence: tuple[str,...]
+    uncertain: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectExplanation:
     zh: InsightText
     en: InsightText
@@ -41,6 +51,7 @@ class ProjectExplanation:
     source_limited: bool
     schema_version: int = 1
     readme_hash: str | None = None
+    project_kind: ProjectKind | None = None
 
 
 @dataclass(frozen=True, slots=True)

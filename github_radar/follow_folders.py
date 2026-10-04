@@ -109,3 +109,40 @@ def following_filter(db,folder):
     if not isinstance(folder,str) or not folder.isascii() or not folder.isdecimal():raise ValueError('关注分类无效')
     identity=positive_id(int(folder));_folder(db,identity)
     return ' WHERE EXISTS (SELECT 1 FROM follow_folder_items i WHERE i.repo_id=f.repo_id AND i.folder_id=?)',(identity,)
+
+
+def move_project(db,repo_id,source,target):
+    """Move from one real folder, preserving memberships in other folders."""
+    _follow(db,repo_id)
+    current=folder_ids(db,repo_id)
+    def parse(value):
+        if value=='unfiled':return None
+        if not isinstance(value,str) or not value.isascii() or not value.isdecimal():
+            raise ValueError('分类移动位置无效')
+        identity=positive_id(int(value));_folder(db,identity);return identity
+    origin,destination=parse(source),parse(target)
+    if (origin is None and current) or (origin is not None and origin not in current):
+        raise ValueError('项目分类已变化，请刷新后重试')
+    if origin==destination:return
+    if destination is None:
+        db.execute('DELETE FROM follow_folder_items WHERE repo_id=?',(repo_id,))
+    else:
+        if origin is not None:db.execute('DELETE FROM follow_folder_items WHERE repo_id=? AND folder_id=?',(repo_id,origin))
+        db.execute('INSERT OR IGNORE INTO follow_folder_items VALUES(?,?)',(destination,repo_id))
+
+def classify_project(db,repo_id,ids,create_name,at):
+    """Validate, create, follow and classify in the caller's single transaction."""
+    positive_id(repo_id)
+    if db.execute('SELECT 1 FROM repositories WHERE id=?',(repo_id,)).fetchone() is None:
+        raise LookupError('项目不存在')
+    if not isinstance(ids,list) or len(ids)>200:raise ValueError('分类列表无效')
+    for identity in ids:_folder(db,identity)
+    if len(set(ids))!=len(ids):raise ValueError('分类ID不能重复')
+    if not ids and create_name is None and db.execute('SELECT 1 FROM follows WHERE repo_id=?',(repo_id,)).fetchone() is None:
+        raise ValueError('请选择或创建文件夹')
+    selected=list(ids)
+    if create_name is not None:selected.append(create_folder(db,create_name,at).id)
+    db.execute('INSERT OR IGNORE INTO follows VALUES(?,?)',(repo_id,at))
+    set_folders(db,repo_id,selected)
+    return {'followed':True,'ids':selected,
+            'folders':[{'id':f.id,'name':f.name,'count':f.count} for f in list_folders(db)]}

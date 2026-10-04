@@ -1,110 +1,94 @@
 # 产品对接与 AI 开发接续
 
-此文档描述当前源码，帮助新的开发者或 AI 在不依赖旧聊天记录的情况下继续工作。设计与实现必须分开；代码发生变化时同步更新。版本变化集中在 [开发日志](CHANGELOG.md)，环境和打包命令集中在 [开发指南](DEVELOPMENT.md)。
+此文档以当前源码为准；工程变化集中在 [开发日志](CHANGELOG.md)，环境和打包见 [开发指南](DEVELOPMENT.md)，用户操作见 [用户手册](USER_GUIDE.md)。接续时先读根目录 AGENTS.md，再核对 Git 状态和实际代码。
 
-## 1. 当前实际状态
+## 1. 当前状态与交付门槛
 
-1. 产品为星迹 · StarTrail，运行版本 `0.4.0`，Windows x64 优先。公开安装包为 `v0.4.0-preview.1`；仓库 README 的更新不意味着安装包内容变化。
-2. Python 标准库后端、原生网页、SQLite、默认浏览器。没有公网后端、自建账号系统或要求迁移到大型前端框架。
-3. 首页包含增长榜和关键词分组，另有历史日历/搜索、关注与文件夹、设置、README 阅读、本地翻译、GitHub 连接及 Codex 分析。
-4. **当前 AI 仍是手动触发**。增长与关键词的AI检索规划、关键词自动扩词、自动增量核实、跨日候选判断缓存和最多200个候选的新流程均未实现。不要仅凭需求已经确认，就对用户宣称功能已完成。
-5. 开发文档本次更新不修改数据库、排名、界面和安装包。产品改造完成后再更新本节状态。
+1. 星迹 · StarTrail 采用 Python 标准库后端、原生网页、SQLite 和默认浏览器，Windows x64 优先。内部包名、EXE、AppId、任务和数据标识继续兼容 GitHub Radar。
+2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。
+3. 本轮公开安装包仍待最终构建发布。源码实现和测试通过不等于新安装包已经上线；发布标签、冻结程序和隔离安装结果必须在开发日志记录实际证据。
+4. 已执行的完整回归为 542 项通过；后续检索边界 25 项、升级服务与启动 11 项及 Node 更新交互通过。Inno 新备份语法已编译，所用旧冻结目录不能当作新包验收。最终回归、独立复核、真实 AI 限额验证及新冻结/安装验收仍须完成。
+5. 正式用户数据未用于开发测试；真实 AI 验证目前零调用，整个交付最多三次。不能让自动测试访问私人账号或执行批量付费任务。
 
-## 2. 从哪里开始修改
+## 2. 模块与运行链路
 
-| 职责 | 主要入口 | 相关测试 |
+| 职责 | 代码入口 | 修改时必须核对 |
 |---|---|---|
-| 启动、浏览器、会话 | `github_radar/__main__.py`、`browser_launcher.py`、`browser_server.py` | `tests/test_browser_server.py`；以 tests 目录实际文件为准 |
-| 更新与调度 | `daily_update.py`、`service.py`、`update_lock.py`、`windows_scheduler.py` | `tests/test_service.py`、`tests/test_wider_refresh.py`、调度与锁测试 |
-| 候选来源与网络 | `discovery.py`、`github_client.py`、`trending.py`、`trendshift.py`、`public_http.py` | `tests/test_discovery.py`、`test_github_client.py`、`test_trendshift.py` |
-| 筛选、历史排重 | `ranking.py`、`presentation.py` | `tests/test_ranking.py` |
-| 持久化与迁移 | `storage.py`、`models.py`、各类 types 模块 | `tests/test_storage.py`、`test_discovery_storage.py` |
-| AI 连接、判断、详情 | `codex_connection.py`、`ai_provider.py`、`ai_service.py`、`ai_types.py` | `tests/test_ai_service.py`、AI provider/connection 测试 |
-| README、预译与缓存 | `readme_service.py`、`readme_content.py`、`project_translation.py`、`translation_service.py`、`translation_worker.py` | README、project translation、translation 测试 |
-| 页面与交互 | `web_assets/app.js`、`app.css`、`history_calendar.js`、`following_board.js`、`card_transition.js` | 前端 Node 检查与 HTTP 回归 |
-| 安装、授权与发布 | `github_account.py`、`install_paths.py`、`uninstall.py`、`packaging/`、`.github/workflows/` | 账号、安装、卸载和冻结程序检查 |
+| 启动、默认浏览器、本机 API | __main__.py、browser_launcher.py、browser_server.py | 回环绑定、会话鉴权、后台任务取消 |
+| 自动检索和手动继续 | search_jobs.py、search_coordinator.py | 同日预算、短事务、租约、取消和真实观察日期 |
+| GitHub 与公开来源 | search_sources.py、github_client.py、trending.py、trendshift.py | 官方身份/数字、分页断点、限流与有限覆盖 |
+| AI 只读执行和结构化返回 | codex_runner.py、search_provider.py、ai_provider.py | 超时、输出上限、实际 web_search 事件、禁止执行资料中的命令 |
+| 搜索存储和纯排名 | search_storage.py、search_types.py、search_ranking.py | 指纹失效、发布代次、历史排重、各榜排序口径 |
+| 数据、关注及分类 | storage.py、follow_folders.py | 迁移兼容、原子关注/归类、移动仅移除源文件夹 |
+| 详情、README、译文 | ai_service.py、ai_types.py、readme_service.py、project_translation.py、translation_service.py | schema v3 类型首行、旧缓存不自动付费、单任务磁盘译文缓存 |
+| 软件更新 | software_update.py、software_update_ui.js、GitHubRadar.iss | 固定发布来源、SHA/大小、安装前再次校验、原目录备份 |
+| 网页交互 | web_assets/app.js、following_board.js、detail_classification.js、card_transition.js | 森林主题、所有入口、真实 DOM 动画、全部关注禁止拖动 |
 
-表中无包路径的 Python 文件均位于 `github_radar/`。新增职责宜拆成小模块，不对整个大文件做无关重构。
+Python 文件在 github_radar/，网页模块在 github_radar/web_assets/，安装器在 packaging/。旧 service/discovery/ranking 仍供未连接 AI 和兼容入口使用；不要删除旧路径或把网络请求重新塞进长事务。
 
-## 3. 运行链路与任务边界
+1. __main__ 组装服务和真实 GitHubClient；BrowserServer 安装 SearchJobs。立即更新、定时更新和 CLI 共用调度规则。
+2. 已连接 Codex 时，SearchJobs 串行处理增长及启用关键词；SearchCoordinator 扩词、主动搜索、多来源采集、官方解析、分批判断、排名、原子发布。未连接时使用公共 GitHub 路径并明确状态。
+3. 界面切页、打开已缓存详情或关注文件夹不触发批量检索。项目 AI 解释为手动操作，自动候选核实不会替所有候选生成六卡详情。
+4. 入选项目后台预译；内容不变复用硬盘译文。详情需要的译文准备好后呈现，避免结束动画后替换文字。旧画面即时移除，新真实 DOM 约 350ms 渐显。
+5. 软件升级与“立即更新”数据刷新分开。匿名启动检测、六小时节流；发现匹配的新安装包和哈希后才提供软件更新入口。
 
-1. `__main__.py` 组装 store、网络 client、业务 service 和 BrowserServer；服务监听 `127.0.0.1` 动态端口，启动默认浏览器。
-2. 更新进入 `daily_update.py` / `service.py`，发现候选、读取真实仓库和 Star 数据、筛选排重、保存当天快照。成功后 `ProjectPretranslator` 排队准备入选项目译文。
-3. 前端通过本机 API 读取已保存数据，切换分类/历史/关注不自动重新爬取或调用 AI。
-4. 当前 `BrowserServer._run_ai_job` 在后台线程中调用 `AIService.refine_keyword` 或 `explain_project`；关键词一次只核实最多20个。当前网络/AI阶段持有跨进程更新锁，扩大批次前必须处理此边界。
-5. 已有 `_lock` 为进程内状态锁；`update_lock(data_dir)` 为跨进程写任务锁；SQLite 使用事务。三者职责不同，不能为长耗时任务简单延长 HTTP 请求或无限持锁。
-6. 本地翻译单任务处理并缓存到硬盘；项目内容指纹未变化不重译。详情需要的译文准备好后再呈现，避免结束动画后替换文字。
-7. 退出停止后台任务及进程；不能把取消后的结果继续写入当天快照。
+## 3. 两个榜单的规则
 
-## 4. 本机 API 对接规则
+1. 增长使用最近已结束的完整 UTC 日。北京时间 08:00 前，最近完整 UTC 日并不等于本机日历昨天。仅官方可核实的正日增参与增长排名；按日增、累计 Star、仓库 ID 排序。历史回归前五紧凑展示，不占五个新发现名额。
+2. 关键词保留用户原词，缓存最多六个相关表达及对应主题；AI 实际联网检索与 GitHub 搜索、Trending、Trendshift、跟踪候选合并。Trendshift 是发现来源，未上榜不是排除条件。
+3. 身份、归档状态和累计 Star 以 GitHub 解析结果为准。关键词必须相关且达到门槛，再按官方累计 Star 排序；历史已展示和当天其他模块占位排除。只搜索/核实过而没展示的项目不算历史展示。
+4. 每个模块、每日本地日期最多新增核实 200 个，20 个一批，调用前预留预算，失败或重复点击不重置。有效缓存不消耗新核实数；手动继续明确增加最多 200 个。自动主动搜索最多两次，第二次只为明确缺口；扩词和主动搜索与判断的调用次数分别记录。
+5. 每天重新采集当前计划覆盖范围，旧前沿必须刷新官方观察才可作为当天结果。语义内容未变可复用判断；增长证据按统计日更新。有限 API、网站和时间预算无法保证全站零遗漏。
+6. 限流、超时、取消、未解析候选和断点显示为部分完成或暂停，不写成全量完成。无法确认新结果时保留上次已保存结果及其真实日期。
 
-`browser_server.py` 的 `_handle_get`、`_handle_post` 和各 payload 方法为接口实际依据。下面列出主要路径，不虚构尚未实现的深度检索端点。
+## 4. API 对接契约
 
-1. `/api/` 请求需要本次实例的 `X-Radar-Token`；POST 还验证 `Origin` 与本机来源。凭证由启动会话生成，不能固定写进源码、文档或测试样本。
-2. POST 使用 JSON 对象，普通正文最大8192字节，翻译正文最大524288字节；参数还需各业务校验，不能只依赖 JSON 解析。
-3. `200` 为成功读取/已处理，`202` 表示后台任务已受理或同一任务已运行，`400` 参数无效，`403` 会话/来源失败，`404` 不存在，`409` 状态冲突，`503` 依赖不可用。具体路由有各自分支，调用方不能把受理等同于完成。
-4. 任务通过状态接口继续读取；前端需要超时、错误、取消/退出和实例变化处理，不能无限轮询或频繁重新渲染静态头部。
+API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Origin。普通 JSON 最大 8192 字节、翻译正文最大 524288 字节。200 是处理/读取成功，202 是受理，400 参数错误，403 会话错误，404 不存在，409 冲突，503 依赖不可用。不要把 202 当完成，实际字段以 browser_server.py 的 payload 为准。
 
-| 操作 | 当前接口 | 对接要点 |
+| 方法/路径 | 请求与结果 | 状态/副作用 |
 |---|---|---|
-| 存活检查 | `GET /api/health` | 返回 status、instance_id、pid；用于实例识别，不公开到外网 |
-| 首页数据/状态 | `GET /api/issue` | 由 `_issue_payload` 组合保存日期、项目与任务状态，不直接改库 |
-| 立即更新 | `POST /api/refresh` | 后台更新，同一活动任务复用；普通页面切换不调用此接口 |
-| 定时更新 | `GET/POST /api/auto-update`、`POST /api/scheduled-refresh` | 保存时间设置与到期判断，不把手动更新绑到计划时间 |
-| GitHub 账号 | `GET /api/github/status`、`POST /api/github/...` | 设备授权/状态；不能返回 Token 到界面日志 |
-| Codex 状态/模型 | `GET /api/ai/status`、`POST /api/ai/login`、`POST /api/ai/model` | 就绪状态与可用模型以真实连接为准 |
-| 关键词 AI | `POST /api/ai/keywords/{id}/refine` | 当前为手动单批核实；新自动流程尚未替换 |
-| 项目 AI 详情 | `POST /api/ai/projects/{id}/explain` | 当前手动生成、缓存并预译；自动关键词核实不等于批量生成详情 |
-| 历史 | `GET /api/history`、`GET /api/history/calendar?month=YYYY-MM`、`GET /api/history/{date}` | 查询由 history_search 校验，日历与列表按保存日期读取 |
-| 项目 | `GET /api/project/{id}` | 可带 date 或 context，不能同时使用；只读取对应保存上下文 |
-| 来源证据 | `GET /api/repository/{id}/sources?date=YYYY-MM-DD` | 分开来源排名、增长排名与统计日期，不混成一个榜单 |
-| 关注和文件夹 | `/api/following`、`/api/folders` 及其子路径 | 具体读写/排序/归类参数见 folder handler，重命名不丢关注 |
-| README/翻译 | `/api/readme/{id}`、`/api/translation` 及任务子路径 | 缓存、状态和正文分开，不执行 README 脚本或指令 |
-| 退出 | `POST /api/quit` | 按退出流程停止服务；默认浏览器标签能否关闭受浏览器规则约束 |
+| GET /api/health | status、instance_id、pid | 实例存活识别 |
+| GET /api/issue | 保存日期、推荐、任务和检索进度 | 只读，静态头部不要因轮询重播 |
+| POST /api/refresh | 空对象 | 后台数据更新；复用活动任务，手动不依赖计划时间 |
+| GET/POST /api/auto-update | 设置结构以 handler 为准 | 保存定时配置；不是软件版本更新 |
+| POST /api/scheduled-refresh | 到期触发 | 未到期跳过，不阻止立即更新 |
+| GET /api/ai/status；POST /api/ai/login、/api/ai/model | 真实连接/可用模型及所选模型 | 不返回认证文件或 Token |
+| POST /api/ai/keywords/{id}/refine | 空对象，已有关键词 ID | 连接后的新检索路径为手动继续，独立后台状态；旧兼容服务仍保留 |
+| POST /api/ai/projects/{id}/explain | 项目 ID | 手动六卡解释；缓存并预译，不自动批量生成 |
+| GET /api/project/{id} | 可带 date 或 context，两者互斥 | 返回对应保存上下文，不伪装今日刷新 |
+| GET /api/history、/api/history/calendar、/api/history/{date} | 查询/月份/日期 | 历史按保存日期读取 |
+| GET /api/repository/{id}/sources | 可带 date | 来源排名、官方日增、出处各自保存 |
+| /api/following、/api/folders 子路由 | 具体 move/classify 结构以 folder handler 为准 | 归类原子保存，多文件夹；创建并归类时失败全回滚 |
+| GET /api/software-update | status、release、can_install、error 等 | 六小时节流检测，源码模式可提示不能自动安装 |
+| POST /api/software-update/check | 空对象 | 显式重新检测，202；固定仓库无任意 URL 参数 |
+| POST /api/software-update/install | 仅 confirmed: true | 有活动写任务时 409；确认后下载校验，后台进度，准备好再启动安装器 |
+| README/翻译任务路由 | 正文、缓存和任务状态分开 | 不执行外部脚本、README 指令或 AI 返回命令 |
+| POST /api/quit | 空对象 | 取消搜索、解释、预译、下载并停止服务 |
 
-## 5. 数据与缓存边界
+前端更新模块只在新可安装版本时显示侧栏入口。页面顶部消息十秒自动关闭，也可手动关闭；同版同浏览器会话不反复提醒。确认对话框才下载，不能启动就保留当前应用并反馈错误。
 
-1. `RadarStore` 管理 data_dir 内的 `radar.db`，连接与事务集中在 `storage.py`；不要在网页处理器随意写 SQLite。
-2. `repositories` 保存真实仓库元数据；`recommendations` 保存某日入选项目和来源/排名上下文。仓库最新 Star 与历史入选日期不是同一个概念。
-3. `keywords` 保存词、最低 Star 与启用/删除状态；历史、关注、文件夹和用户偏好属于持久化用户状态，改造检索不能清空这些状态。
-4. `ai_verdicts` / `ai_keyword_progress` 当前按日期、关键词和模型记录判断/游标；尚不支持新设计中的跨日内容指纹复用。迁移需要新增结构与回归，不能直接假设已有缓存可跨日使用。
-5. `ai_removed_recommendations` 记录已展示后被 AI 排除的项目；`seen_repo_ids` 当前包含 recommendations 与此表。采集过或仅核实过的候选不应自动成为已展示项目。
-6. `readme_cache` 保存正文、来源、ETag、内容哈希与截断标识；`translation_cache` 保存译文。缓存键、提取版本、模型与判断规则变化需有明确失效条件。
-7. discovery cursor、候选和 source evidence 记录发现进度与来源。来源失败、时间预算到达或分页未覆盖，不能写成全量完成。
-8. 升级迁移保留旧数据，迁移设计要说明旧记录如何转入、无指纹记录是否需要补核，以及取消/异常后事务如何回滚。
+## 5. 存储、失效和并发
 
-## 6. 关键产品约束
+1. RadarStore 管理 radar.db。repositories 是最新元数据，star_snapshots 是带真实 observed_at 的日期快照，recommendations 是当天入选上下文。displayed_repositories 保留实际展示历史；删除/替换当天卡片不擦掉已经展示的历史。
+2. SearchScope 包含模块/关键词、本地日、统计日、原词、门槛、模型、规则和扩词哈希。query_expansions、search_candidates、search_readmes、search_judgments、search_runs、search_cursors 管理扩词、观察、README、判断、租约/预算和来源断点。
+3. 语义缓存按模型、规则、关键词配置、README 内容指纹失效，排除 Star 和日期；证据缓存还包含官方统计日及出处。未知或旧 schema 的类型不自动花额度重解读。AI 类型使用 schema v3，含双语首行定性、证据和不确定状态。
+4. run lease 核对 owner/generation/expiry；同一天调整模型不会洗掉已花预算。发布事务重新验证日期、统计日、关键词启用/配置、扩词和当前模型，旧任务不得覆盖新设置或跨日结果。
+5. 网络和 AI 在数据库事务之外；frontier 分页读完关闭游标才处理。数据库写入短事务，更新租约有界；不要用延长锁时间代替并发设计。取消是状态，不是成功的空榜。
+6. 全部关注是汇总不可拖动；未分类和自建文件夹允许拖动。拖到目标只移除源文件夹，不删除其他分类；拖到未分类清空成员关系但保留关注。所有详情入口的归类保存自动关注，取消不写入。
 
-1. 日增 Star 取最近已结束的完整 UTC 日，保存日期使用本机日期。累计 Star、活动热度、网站上榜和官方日增分别保存，不互相冒充。
-2. 历史排重与当天其他分组占位仍有效；本组已有低 Star 不应永久占位阻止更高 Star 的合格候选。此选择缺陷目前待修复。
-3. 已复现当天AI新增推荐未同步当天Star快照，详情会取较早的snapshot导致旧日期/旧Star；这是待修复缺陷。需原子保存、按当天/历史上下文读取，并独立验证跨日排重。
-4. 当前关键词 AI “完成”指本批次/已有五张已核实卡片，不代表全站搜索完成；新设计要准确区分采集数、去重数、已核实数和剩余数。
-5. 浏览器仍使用默认浏览器，保留森林透明主题、固定侧栏、主题滚动条和350ms以内真实 DOM 渐显。只动画变化内容，静态头部不反复重播。
-6. GitHub 数据来自真实接口；Trendshift/Trending 是发现与上榜证据，不是官方相关性认证。未上榜项目不能因此被排除。
-7. README 和 AI 返回均不可信，必须验证结构、转义显示、限制长度；不能执行网页/README命令，不能让 AI 返回值控制任意 URL、SQL、文件或安装步骤。
-8. 默认离线翻译不消耗 Codex 额度；自动关键词 AI 与手动详情 AI 的触发和额度需要明确区分。自动 AI 功能当前仍未交付。
+## 6. 安装升级与数据恢复
 
+1. 安装身份仍为 GitHubRadar，应用内版本来源是固定 StarTrail GitHub Releases。稳定渠道排除预览；检查 release、安装包名、SHA256SUMS、大小、下载域名和版本，绝不采信 AI 给出的安装地址。
+2. 下载流式写入专用缓存，校验完成才可用；启动前重新验证大小和 SHA。仅冻结安装版、自己的原安装目录和 UserData 标记允许自动安装；源码模式手动下载。
+3. 应用正常退出写任务后，安装器取得维护锁、停止旧进程/计划任务，再复制 UserData 到 Backups/pre-update-*。跳过嵌套 Backups 与软件下载缓存，拒绝重解析目录，完整成功才写 BACKUP_COMPLETE.txt。失败停止覆盖。
+4. 安装器只更新程序文件，保留关键词、历史、关注、文件夹、设置及认证状态。快捷方式显式使用 startrail.ico。新装/直接下载重装和应用内更新共用同一安装器规则。
+5. 恢复前关闭软件和计划任务，先另存当前 UserData；只使用带完成标记的备份恢复，不能在运行时替换数据库。认证加密受本机 Windows 用户约束，跨电脑不保证凭证可迁移。
+6. 不移动真实已安装目录来整理文件；卸载入口与路径绑定。旧验收程序只记录给用户卸载，临时报告和构建产物放集中可删除目录，不进入 Git。
 
-## 7. 当前待办与接续顺序
+## 7. 发布前清单与接续约束
 
-优先工作见 [增长与关键词检索设计草案](superpowers/specs/2026-10-04-keyword-discovery-design.md)：AI提前规划/扩词、实际联网搜索并贡献有出处的仓库、与多来源采集合并、自动增量核实、跨日缓存、重新排名、进度与断点、短时写锁。增长按官方完整UTC日增排序，关键词按累计Star排序；二者不能互换，也不能使用AI生成的数字。
-
-1. 先确认设计和有限覆盖的表达，不许承诺“GitHub全站零遗漏”。每天扫描计划覆盖范围，新候选/内容变化按优先级核实，不设置任意20个日常截止；单次新增核实最多200个。
-2. 根据设计补实施步骤和失败回归，按职责逐项实现。首先验证更高 Star 相关候选能替换低 Star 旧卡，随后验证扩词、合并和缓存。
-3. 覆盖候选充足/不足、来源失败、超时/限流、重复更新、跨日内容变化、取消/退出、更新与 AI 并发、模型变化、关键词停用及迁移恢复。
-4. 完成后跑完整回归、公开文件扫描、Git差异、隔离界面检查；实际调用付费 AI 的次数和范围单独说明，不能为了测试无控制消耗额度。
-5. 同步 CHANGELOG、此文档、开发指南、用户手册及双语 README；核对待办与实际源码一致，再提交/推送。
-6. 本次完整交付需要构建新安装包并同步手册；安装包若尚未重新构建，明确旧包仍是旧功能。发布需实际新标签、对应源码和哈希校验。
-7. 本次另需移除关注卡片“移动到”，允许未分类/自建文件夹卡片拖动（全部关注禁止）；详情右上角统一“归类”，已有文件夹或创建并归类，未关注项目保存时原子关注。现有详情分类在侧栏且关注后才可用，创建仅选中仍需保存；这些调整尚未实现，具体语义见同一设计稿。
-8. 已审阅设计进入[实施计划](superpowers/plans/2026-10-04-search-and-classification.md)，尚待计划审阅/执行。新增加AI解读类型定性：必须是“仓库原用途”首行第一句话高亮，schema v3同一次解读返回，旧缓存兼容且不自动付费更新，六卡布局不变；当前代码尚未支持。
-9. 关键算法/约束附原因注释；无用包、临时产物和旧验收资料整理到既有清理入口，由用户删除/卸载。保留正式数据和活动源码，不能移动已安装目录而破坏卸载。
-
-## 8. 下一位 AI 的工作核对表
-
-1. 阅读四个入口文档，核对分支/状态/源码并找对应测试。
-2. 区分已实现、设计待实现、已知缺陷与未实测事项，先复现后修复。
-3. 保持现有行为与用户数据，给影响行为的变化补测试。
-4. 检查长任务锁、取消状态、缓存失效和权限/文本边界。
-5. 新接口写明方法、路径、请求/响应、错误码、幂等、持久化和前端调用位置；更改旧接口一起更新调用方与回归。
-6. 用实际执行证据更新统一日志，不引用未经核对的旧“通过”结论。
-7. 提交前检查文档链接、公共隐私和暂存区；只公开源码与安全文档，不带私人原始材料。
+1. 核对 Git 差异、所有新增文件、文档相对链接和图片，不含真实数据库、Token、认证日志、电脑绝对路径、原始聊天与私人验收附件。
+2. 跑完整 Python 回归、Node 交互、公开文件检查、diff --check；付费 AI 验证单列次数及失败，不能用模拟事件冒充真实联网验证。
+3. 独立代码复核、冻结程序、隔离中文路径安装、覆盖升级、备份完整性、快捷方式图标及安装包 SHA 都需真实证据。干净第二台 Windows 未验证就明确保留限制。
+4. 源码版本、安装器版本、RELEASE_TAG 与发布标签对应，先本地保存，再推送并发布匹配安装包。README 只描述当前产品；每次提交的变化写提交说明和统一日志。
+5. 下次开发从 CHANGELOG 的最新实际证据开始；不要重复请求已获授权的实现，也不要把未发布草案当交付成功。

@@ -37,6 +37,7 @@ async function run(){
   app.context.location.search='?folder=1';await app.board.load();
   assert.equal(app.node('following-folders').querySelectorAll('.folder-tab')[0],stableTab,'Selecting a folder must preserve the stable controls');
   assert.equal(stableSelect.getAttribute('aria-pressed'),'true');
+  assert.equal(app.node('following-cards').children[0].children[0].draggable,true,'Custom folder cards must be draggable');
   app.context.location.search='';await app.board.load();
   const dots=tabs[0].querySelectorAll('.folder-menu-button')[0],menu=tabs[0].querySelectorAll('.folder-actions')[0];
   assert.equal(dots.textContent,'⋮','Dots are vertical');
@@ -56,6 +57,7 @@ async function run(){
   assert.equal(app.node('following-cards').children[0].children[0].draggable,false,'All followed projects cannot drag');
   app.context.location.search='?folder=unfiled';await app.board.load();
   const card=app.node('following-cards').children[0].children[0];assert.equal(card.draggable,true);
+  assert.equal(app.node('following-cards').querySelectorAll('.following-move').length,0,'Remove card-bottom move buttons');
   card.listeners.get('dragstart')(event());
   tabs=app.node('following-folders').querySelectorAll('.folder-tab');await tabs[0].listeners.get('drop')(event());
   assert.equal(app.posts.at(-1).body.action,'move_unfiled');assert.equal(app.posts.at(-1).body.folder_id,2);

@@ -689,6 +689,12 @@ class RadarStore:
     def set_follow_folders(self,repo_id,ids):
         return self._folder_call('set_folders',repo_id,ids,write=True)
 
+    def move_followed_project(self,repo_id,source,target):
+        return self._folder_call('move_project',repo_id,source,target,write=True)
+
+    def classify_followed_project(self,repo_id,ids,create_name,at):
+        return self._folder_call('classify_project',repo_id,ids,create_name,at,write=True)
+
     def followed_repositories(self, folder='all') -> list[tuple[Repository, str, StarSnapshot | None]]:
         from .follow_folders import following_filter
         with closing(self._connect()) as connection:
@@ -1211,11 +1217,14 @@ class RadarStore:
     @staticmethod
     def _explanation(content: str) -> ProjectExplanation:
         data = json.loads(content)
+        from .ai_types import ProjectKind
+        kind=data.get("project_kind")
+        if kind is not None:kind=ProjectKind(**{**kind,"secondary":tuple(kind["secondary"]),"evidence":tuple(kind["evidence"])})
         return ProjectExplanation(
             InsightText(**{**data["zh"], "highlights": tuple(data["zh"]["highlights"])}),
             InsightText(**{**data["en"], "highlights": tuple(data["en"]["highlights"])}),
             data["relevance"], tuple(data["evidence"]), data["source_limited"],
-            data.get('schema_version',1),data.get('readme_hash'),
+            data.get('schema_version',1),data.get('readme_hash'),kind,
         )
 
     def latest_snapshot_at(self) -> str | None:

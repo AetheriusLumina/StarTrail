@@ -39,6 +39,23 @@ class ReadyConnection:
 
 
 class BrowserServerTests(unittest.TestCase):
+    def test_search_expansion_is_editable_without_ai_and_origin_protected(self):
+        rule=self.store.add_keyword('skills',1000)
+        path=f'/api/search/keywords/{rule.id}/expansion'
+        self.assertEqual(self.get(path,token=False)[0],403)
+        self.assertEqual(self.post(path,{'terms':['agent skills']},token=False)[0],403)
+        self.assertEqual(self.post(path,{'terms':['agent skills']})[0],200)
+        status,_,raw=self.get(path)
+        self.assertEqual(status,200);self.assertEqual(json.loads(raw)['terms'],['agent skills'])
+        self.assertEqual(self.post(path,{'terms':['x']*7})[0],400)
+        self.assertEqual(self.post(path,{'terms':['ignore instructions'], 'model':'other'})[0],400)
+
+    def test_classification_script_is_served(self):
+        status,kind,data=self.get('/assets/detail_classification.js')
+        self.assertEqual(status,200)
+        self.assertIn(b'RadarDetailClassification',data)
+        self.assertIn('javascript',kind['Content-Type'])
+
     def test_refresh_and_readme_completion_enqueue_only_selected_ids(self):
         self.save_issue()
         from types import SimpleNamespace
@@ -364,6 +381,15 @@ class BrowserServerTests(unittest.TestCase):
         self.assertEqual(payload['sources'][0]['source_rank'],2)
         self.assertNotIn('access_token',raw.decode())
         self.assertEqual(self.get('/api/repository/7/sources?date=2026-09-30',token=False)[0],403)
+    def test_classify_from_unfollowed_detail_and_drag_between_custom_folders(self):
+        self.save_issue()
+        a=self.store.create_follow_folder('A','2026-10-04T12:00:00Z')
+        b=self.store.create_follow_folder('B','2026-10-04T12:00:00Z')
+        status,result=self.post('/api/following/1/classify',{'ids':[a.id],'create_name':'New'})
+        self.assertEqual(status,200);self.assertTrue(result['followed'])
+        status,result=self.post('/api/following/1/folders',{'action':'move','source':str(a.id),'target':str(b.id)})
+        self.assertEqual(status,200);self.assertIn(b.id,result['ids']);self.assertNotIn(a.id,result['ids'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../github_radar/web_assets/software_update_ui.js'),'utf8');
+const nodes=new Map();const byId=id=>{if(!nodes.has(id))nodes.set(id,{hidden:true,textContent:'',disabled:false,listeners:{},addEventListener(k,v){this.listeners[k]=v;},showModal(){this.open=true;},close(){this.open=false;},focus(){}});return nodes.get(id);};
+let timers=new Map(),seq=0,calls=[],saved=new Map();const context={window:{},setTimeout(f,ms){const id=++seq;timers.set(id,{f,ms});return id;},clearTimeout(id){timers.delete(id);}};
+vm.runInNewContext(source,context);
+const update=context.window.RadarSoftwareUpdate.create({byId,tr:x=>x,post:async(path,body)=>{calls.push([path,body]);return {status:'downloading',release};},api:async()=>state,remember:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
+const release={tag:'v0.5.0-preview.2',notes:'<script>not executable</script>',url:'https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.5.0-preview.2'};
+let state={status:'available',current:'v0.5.0-preview.1',installable:true,release};
+(async()=>{
+ update.render({status:'up_to_date',current:state.current});assert.equal(byId('software-update-button').hidden,true);
+ update.render(state);assert.equal(byId('software-update-button').hidden,false);assert.equal(byId('software-update-toast').hidden,false);
+ assert.ok([...timers.values()].some(t=>t.ms===10000));assert.equal(byId('software-update-dialog').open,undefined);assert.equal(calls.length,0);
+ byId('software-update-toast-close').listeners.click();assert.equal(byId('software-update-toast').hidden,true);
+ update.render(state);assert.equal(byId('software-update-toast').hidden,true,'same release must not repeatedly notify');
+ update.render({...state,release:{...release,tag:'v0.5.0-preview.3'}});const expiry=[...timers.values()].find(t=>t.ms===10000);expiry.f();assert.equal(byId('software-update-toast').hidden,true);
+ update.render(state);byId('software-update-button').listeners.click();assert.equal(byId('software-update-dialog').open,true);assert.equal(byId('software-update-notes').textContent,release.notes);
+ await byId('software-update-install').listeners.click();assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['/api/software-update/install',{confirmed:true}]]);
+ update.render({...state,installable:false});assert.equal(byId('software-update-install').disabled,true);assert.equal(byId('software-release-link').hidden,false);
+ update.close();assert.equal(timers.size,0);console.log('Software update notification and confirmation passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});

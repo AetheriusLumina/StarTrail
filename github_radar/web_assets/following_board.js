@@ -58,7 +58,13 @@ window.RadarFollowingBoard=(()=>{
       tabsSignature=signature;clear(root);buttons.clear();
       for(const entry of [{id:'all',name:tr('全部关注'),count:data.all_count??data.cards.length},{id:'unfiled',name:tr('未分类'),count:data.unfiled_count??data.cards.length}]){
         const b=action(entry.name+' · '+entry.count,'folder-system',()=>open('/following'+(entry.id==='all'?'':'?folder=unfiled')));
-        b.setAttribute('aria-pressed',String(folder===entry.id));buttons.set(entry.id,b);root.append(b);
+        b.setAttribute('aria-pressed',String(folder===entry.id));buttons.set(entry.id,b);
+        if(entry.id==='unfiled'){
+          b.addEventListener('dragover',e=>{if(drag?.kind==='project'&&!busy&&!loading){e.preventDefault();b.setAttribute('data-drop-target','true');}});
+          b.addEventListener('dragleave',()=>b.setAttribute('data-drop-target','false'));
+          b.addEventListener('drop',e=>{if(drag?.kind!=='project'||busy||loading)return;e.preventDefault();stop(e);const value=drag;endDrag();b.setAttribute('data-drop-target','false');return write('/api/following/'+value.id+'/folders',{action:'move',source:value.source,target:'unfiled'});});
+        }
+        root.append(b);
       }
       folders.forEach((item,index)=>{
         const row=element('div','folder-tab button button-quiet');row.draggable=true;row.setAttribute('data-folder-id',String(item.id));
@@ -78,21 +84,21 @@ window.RadarFollowingBoard=(()=>{
         row.addEventListener('dragleave',()=>row.setAttribute('data-drop-target','false'));
         row.addEventListener('drop',e=>{if(!drag||busy||loading)return;e.preventDefault();stop(e);const value=drag;endDrag();
           if(value.kind==='folder')return reorder(value.id,item.id);
-          if(value.kind==='project'&&folder==='unfiled')return write('/api/following/'+value.id+'/folders',{action:'move_unfiled',folder_id:item.id});
+          if(value.kind==='project')return write('/api/following/'+value.id+'/folders',value.source==='unfiled'?{action:'move_unfiled',folder_id:item.id}:{action:'move',source:value.source,target:String(item.id)});
         });root.append(row);
       });
     }
     function renderCards(data){
       const root=byId('following-cards');clear(root);
       for(const card of data.cards||[]){
-        const row=element('div','following-project-row'),node=cardNode(card,{compact:true});node.draggable=folder==='unfiled';
-        node.addEventListener('dragstart',e=>{if(folder!=='unfiled'||busy||loading){e.preventDefault();return;}
-          node.setAttribute('data-drag-block','true');drag={kind:'project',id:card.repo_id};e.dataTransfer.setData('application/x-github-radar',JSON.stringify(drag));e.dataTransfer.effectAllowed='move';});
+        const row=element('div','following-project-row'),node=cardNode(card,{compact:true});node.draggable=folder!=='all';
+        node.addEventListener('dragstart',e=>{if(folder==='all'||busy||loading){e.preventDefault();return;}
+          node.setAttribute('data-drag-block','true');drag={kind:'project',id:card.repo_id,source:folder};e.dataTransfer.setData('application/x-github-radar',JSON.stringify(drag));e.dataTransfer.effectAllowed='move';});
         node.addEventListener('dragend',endDrag);
         node.addEventListener('pointerdown',()=>node.setAttribute('data-drag-block','false'));
         node.addEventListener('keydown',()=>node.setAttribute('data-drag-block','false'));
         row.append(node);
-        if(folder==='unfiled'){const move=action('移动到','following-move',()=>showEditor('move',card));move.disabled=!folders.length;move.setAttribute('aria-label',tr('移动到文件夹')+' · '+card.title);row.append(move);}
+
         root.append(row);
       }
       byId('following-empty').hidden=!!data.cards?.length;

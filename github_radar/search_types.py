@@ -16,6 +16,7 @@ class SearchScope:
     min_stars: int
     model_id: str | None
     rules_version: str = SEARCH_RULES_VERSION
+    expansion_hash: str = ""
 
     def __post_init__(self):
         if self.section not in ('growth','keyword'):

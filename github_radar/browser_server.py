@@ -45,9 +45,12 @@ class BrowserServer:
 
     def __init__(self, service: RadarService, store: RadarStore,
                  ai_service: AIService | None = None,
-                 connection: CodexConnection | None = None, scheduler=None, github_account=None):
+                 connection: CodexConnection | None = None, scheduler=None, github_account=None, software_updater=None):
         self.service = service
         self.store = store
+        from .software_update import SoftwareUpdater
+        self.software_updater = software_updater or SoftwareUpdater(store.data_dir)
+        self._check_software_on_start = software_updater is not None or isinstance(service.client, GitHubClient)
         self.github_account = github_account or GitHubAccount(store.data_dir,
                                   client_id=publisher_client_id())
         if isinstance(service.client,GitHubClient):
@@ -58,6 +61,9 @@ class BrowserServer:
         self._schedule_error = ""
         self.ai_service = ai_service or AIService(service.client, store,
                                                   CodexProvider(self.connection))
+        if isinstance(service.client,GitHubClient) and service.search_jobs is None:
+            from .search_jobs import install_search
+            install_search(service,self.connection)
         self.token = secrets.token_urlsafe(32)
         self.instance_id = secrets.token_hex(16)
         self._thread: threading.Thread | None = None
@@ -102,6 +108,7 @@ class BrowserServer:
             self._thread = threading.Thread(target=self._http.serve_forever, daemon=True)
             self._thread.start()
             self._pretranslate_latest()
+            if self._check_software_on_start:self.software_updater.check()
 
     def start_due_update(self, now: datetime | None = None) -> bool:
         """Catch up today's due update on startup without blocking page display."""
@@ -134,6 +141,8 @@ class BrowserServer:
         if self._closed:
             return
         self._closed = True
+        self.software_updater.close()
+        if getattr(self.service, "search_jobs", None) is not None:self.service.search_jobs.cancel()
         self.readme_service.cancel()
         self.project_pretranslator.close()
         self.translation_service.close()
@@ -158,6 +167,9 @@ class BrowserServer:
             if not secrets.compare_digest(handler.headers.get("X-Radar-Token", ""), self.token):
                 self._send(handler, 403, {"error": "forbidden"})
                 return
+            if path == "/api/software-update":
+                self._send(handler, 200, self.software_updater.check())
+                return
             if path == "/api/health":
                 self._send(handler, 200, {
                     "status": "ok", "instance_id": self.instance_id, "pid": os.getpid(),
@@ -167,6 +179,8 @@ class BrowserServer:
                 result = self.translation_service.get(path.removeprefix('/api/translation/'))
                 self._send(handler,200 if result else 404,result or {'error':'not_found'})
                 return
+            if path.startswith('/api/search/keywords/') and path.endswith('/expansion'):
+                self._search_expansion(handler,path);return
             if path == "/api/issue":
                 self._send(handler, 200, self._issue_payload())
                 return
@@ -298,7 +312,7 @@ class BrowserServer:
             self._send(handler, 200, (_ASSETS / path.rsplit('/', 1)[-1]).read_bytes(), 'image/png')
         elif path in ('/fonts/cormorant-garamond.ttf', '/fonts/noto-serif-sc.ttf'):
             self._send(handler,200,(_ASSETS / 'fonts' / path.rsplit('/',1)[-1]).read_bytes(),'font/ttf')
-        elif path in ("/assets/app.css", "/assets/app.js", "/assets/i18n.js", "/assets/translation.js", "/assets/history_following.js", "/assets/history_calendar.js", "/assets/following_board.js", "/assets/card_transition.js"):
+        elif path in ("/assets/app.css", "/assets/app.js", "/assets/i18n.js", "/assets/translation.js", "/assets/history_following.js", "/assets/history_calendar.js", "/assets/following_board.js", "/assets/detail_classification.js", "/assets/card_transition.js", "/assets/software_update_ui.js"):
             filename = path.rsplit("/", 1)[-1]
             content_type = "text/css" if filename.endswith(".css") else "text/javascript"
             self._send(handler, 200, (_ASSETS / filename).read_bytes(),
@@ -334,6 +348,7 @@ class BrowserServer:
                 ai_worker = self._ai_worker_thread
                 readme_worker = self._readme_worker
             self.ai_service.cancel()
+            if getattr(self.service,'search_jobs',None) is not None:self.service.search_jobs.cancel()
             self._send(handler, 202, {"status": "quitting"})
             threading.Thread(target=self._finish_quit,
                              args=(worker, ai_worker, readme_worker), daemon=True).start()
@@ -364,8 +379,9 @@ class BrowserServer:
             self._send(handler, 202, {"status": "accepted"})
             return
         if path not in ("/api/refresh", "/api/keywords", "/api/preferences",
-                        "/api/auto-update", "/api/translation", "/api/folders") and not path.startswith(
-                ("/api/ai/", "/api/following/", "/api/keywords/", "/api/github/", "/api/readme/", "/api/folders/", "/api/translation/")):
+                        "/api/auto-update", "/api/translation", "/api/folders",
+                        "/api/software-update/check", "/api/software-update/install") and not path.startswith(
+                ("/api/ai/", "/api/following/", "/api/keywords/", "/api/github/", "/api/readme/", "/api/folders/", "/api/translation/", "/api/search/")):
             self._send(handler, 404, {"error": "not_found"})
             return
         try:
@@ -378,6 +394,10 @@ class BrowserServer:
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self._send(handler, 400, {"error": "请求内容无效"})
             return
+        if path.startswith('/api/software-update/'):
+            self._software_update_action(handler,path,payload);return
+        if path.startswith('/api/search/keywords/') and path.endswith('/expansion'):
+            self._search_expansion(handler,path,payload);return
         if path.startswith('/api/translation/'):
             identity=path.removeprefix('/api/translation/').removesuffix('/cancel')
             if not path.endswith('/cancel') or len(identity)!=32 or any(c not in '0123456789abcdef' for c in identity):
@@ -397,7 +417,7 @@ class BrowserServer:
                 self._send(handler,400,{'error':str(exc)}); return
             self._send(handler,200 if result['status']=='ready' else 202,result)
             return
-        if path=='/api/folders' or path.startswith('/api/folders/') or (path.startswith('/api/following/') and path.endswith('/folders')):
+        if path=='/api/folders' or path.startswith('/api/folders/') or (path.startswith('/api/following/') and path.endswith(('/folders','/classify'))):
             self._handle_folder_post(handler,path,payload);return
         if path.startswith('/api/readme/'):
             repo_id = self._repo_id(path.removeprefix('/api/readme/'))
@@ -544,6 +564,26 @@ class BrowserServer:
                 return
             self._start_worker_locked()
         self._send(handler, 202, {"busy": True, "already_running": False})
+
+    def _search_expansion(self,handler,path,payload=None):
+        from .search_storage import SearchStore
+        from .search_types import SearchScope,QueryExpansion
+        from hashlib import sha256
+        identity=path.removeprefix('/api/search/keywords/').removesuffix('/expansion')
+        if not identity.isdecimal():self._send(handler,404,{'error':'not_found'});return
+        rule=next((r for r in self.store.list_keywords() if r.id==int(identity)),None)
+        if rule is None:self._send(handler,404,{'error':'not_found'});return
+        scope=SearchScope('keyword',rule.id,date.today().isoformat(),None,rule.term,rule.min_stars,
+            self.store.load_ai_active_model() or self.store.load_ai_model())
+        search=SearchStore(self.store);old=search.load_expansion(scope)
+        if payload is not None:
+            terms=payload.get('terms')
+            if set(payload)!={'terms'} or not isinstance(terms,list) or len(terms)>6 or any(not isinstance(t,str) or not 1<=len(t.strip())<=120 for t in terms):
+                self._send(handler,400,{'error':'扩展词最多6个，每个1到120字'});return
+            terms=tuple(dict.fromkeys(t.strip() for t in terms if t.strip()!=rule.term))
+            old=QueryExpansion(rule.term,terms,old.topics if old else (),'1')
+            search.save_expansion(scope,old)
+        self._send(handler,200,asdict(old) if old else {'original':rule.term,'terms':[],'topics':[],'version':'1'})
 
     def _handle_keyword_settings_post(self, handler: BaseHTTPRequestHandler,
                                       path: str, payload: dict) -> None:
@@ -722,7 +762,12 @@ class BrowserServer:
                     auto_selected: bool = False, context_date: str | None = None) -> None:
         checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
         try:
-            with update_lock(self.store.data_dir):
+            search_jobs=getattr(self.service,'search_jobs',None)
+            if kind=='refine' and search_jobs is not None:
+                search_jobs.continue_keyword(target,day,model_id=model_id)
+                if auto_selected:self.store.save_ai_active_model(model_id)
+            else:
+              with update_lock(self.store.data_dir):
                 if kind == "refine":
                     self.ai_service.refine_keyword(day, target, model_id, checked_at)
                 else:
@@ -756,8 +801,11 @@ class BrowserServer:
         observed_at = datetime.now().astimezone().isoformat(timespec="seconds")
         today = date.today().isoformat()
         try:
-            with update_lock(self.store.data_dir):
+            if getattr(self.service,'search_jobs',None) is not None:
                 result = self.service.refresh(today, observed_at)
+            else:
+                with update_lock(self.store.data_dir):
+                    result = self.service.refresh(today, observed_at)
         except UpdateBusyError:
             result = replace(self.service.load_latest(today), status="error", stale=True,
                              message="已有任务正在运行，请稍后再试")
@@ -790,6 +838,34 @@ class BrowserServer:
                            reason='README 读取未完成，请稍后重试。')
         with self._lock: self._readme_states[repo_id] = view
         if view.document: self.project_pretranslator.enqueue([repo_id])
+
+    def _software_update_action(self, handler, path, payload):
+        """Only the trusted release client selects a URL; webpages cannot supply one."""
+        if path.endswith('/check'):
+            if payload:self._send(handler,400,{'error':'请求内容无效'});return
+            self._send(handler,202,self.software_updater.check(force=True));return
+        if payload != {'confirmed':True} or type(payload.get('confirmed')) is not bool:
+            self._send(handler,400,{'error':'请确认更新将退出软件，并由安装程序备份和保留原数据'});return
+        with self._lock:
+            if self._quitting or any(t and t.is_alive() for t in (self._worker,self._ai_worker_thread,self._readme_worker)):
+                self._send(handler,409,{'error':'请等待当前更新或分析完成后再升级软件'});return
+            try:state=self.software_updater.start(self._software_ready)
+            except ValueError as exc:self._send(handler,400,{'error':str(exc)});return
+        self._send(handler,202,state)
+
+    def _software_ready(self, target, release):
+        from .software_update import launch_installer
+        # A launch failure keeps the running reader and its data available.
+        with self._lock:
+            if self._quitting:raise ValueError('软件正在退出，请下次重新更新')
+            launch_installer(target,release,self.store.data_dir)
+            self._quitting=True
+            workers=(self._worker,self._ai_worker_thread,self._readme_worker)
+        self.ai_service.cancel()
+        if getattr(self.service,'search_jobs',None) is not None:self.service.search_jobs.cancel()
+        self.project_pretranslator.close()
+        self.translation_service.close()
+        threading.Thread(target=self._finish_quit,args=workers,daemon=True).start()
 
     def _finish_quit(self, worker: threading.Thread | None,
                      ai_worker: threading.Thread | None,
@@ -850,11 +926,18 @@ class BrowserServer:
                 elif payload.get('action')=='delete' and set(payload)=={'action'}:
                     self.store.delete_follow_folder(identity);result={'deleted':True}
                 else:raise ValueError('分类操作无效')
+            elif path.endswith('/classify'):
+                repo_id=self._repo_id(path[len('/api/following/'):-len('/classify')])
+                if repo_id is None or set(payload)!={'ids','create_name'}:raise ValueError('归类参数无效')
+                result=self.store.classify_followed_project(repo_id,payload['ids'],payload['create_name'],
+                    datetime.now().astimezone().isoformat(timespec='seconds'))
             else:
                 repo_id=self._repo_id(path[len('/api/following/'):-len('/folders')])
                 if repo_id is None:raise ValueError('项目分类参数无效')
                 if set(payload)=={'action','folder_id'} and payload['action']=='move_unfiled':
                     self.store.move_unfiled_to_folder(repo_id,payload['folder_id'])
+                elif set(payload)=={'action','source','target'} and payload['action']=='move':
+                    self.store.move_followed_project(repo_id,payload['source'],payload['target'])
                 elif set(payload)=={'ids'}:self.store.set_follow_folders(repo_id,payload['ids'])
                 else:raise ValueError('项目分类参数无效')
                 result={'ids':self.store.follow_folder_ids(repo_id)}
@@ -946,6 +1029,11 @@ class BrowserServer:
         selected_model = self.store.load_ai_model() or self.store.load_ai_active_model()
         verdicts = {rule.id: self.store.ai_verdicts(result.local_date, rule.id, selected_model)
                     for rule in keyword_rules}
+        from .search_storage import SearchStore
+        search_store=SearchStore(self.store)
+        search_progress=search_store.current_progress(date.today().isoformat())
+        for rule in keyword_rules:
+            verdicts[rule.id].update(search_store.keyword_verdicts(rule.id,selected_model,{r.repo_id for r in result.recommendations if r.keyword_id==rule.id}))
         sections = []
         keyword_cards: dict[int, list[dict]] = {rule.id: [] for rule in keyword_rules}
         for section_id, title in (("growth", "Star 增长"), ("keyword", "关键词推荐")):
@@ -976,10 +1064,12 @@ class BrowserServer:
             progress = self.store.ai_progress(result.local_date, rule.id, selected_model)
             group_job = (ai_state if ai_state and ai_state["kind"] == "refine"
                          and ai_state["target_id"] == rule.id else None)
+            current_search=next((p for p in search_progress if p.keyword_id==rule.id and p.section=='keyword'),None)
             keyword_groups.append({
                 "keyword_id": rule.id, "term": rule.term,
                 "cards": keyword_cards.get(rule.id, []),
-                "checked_count": progress.checked_count,
+                "checked_count": current_search.newly_checked+current_search.cache_hits if current_search else progress.checked_count,
+                "search_progress": asdict(current_search) if current_search else None,
                 "ai_status": group_job["status"] if group_job else
                              "checked" if progress.checked_count else "idle",
                 "ai_message": tr(language, group_job["message"]) if group_job else "",
@@ -997,6 +1087,7 @@ class BrowserServer:
             "keywords": [asdict(item) for item in keyword_rules],
             "sections": sections,
             "keyword_groups": keyword_groups,
+            "search_progress": [asdict(p) for p in search_progress],
             "ai_busy": ai_state is not None and ai_state["status"] == "running",
         }
 
@@ -1056,7 +1147,7 @@ class BrowserServer:
             and ai_state["target_id"] == repo_id else None
         try:document=self.store.load_readme(repo_id)
         except (ValueError,TypeError,OSError,sqlite3.Error):document=None
-        stale=bool(saved and (saved[0].schema_version<2 or
+        stale=bool(saved and (saved[0].schema_version<3 or
                    (document and saved[0].readme_hash!=document.content_hash)))
         return {
             "repo_id": repo_id,

@@ -26,6 +26,7 @@ class SourceEvidence:
     topics: tuple[str, ...] = ()
     day_boundary: str | None = None
     repo_id: int | None = None
+    evidence_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

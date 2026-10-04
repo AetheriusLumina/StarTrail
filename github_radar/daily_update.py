@@ -58,19 +58,19 @@ def run_scheduled_update(store, service, now: datetime) -> str:
                 return "skipped"
             if not store.begin_auto_attempt(day, observed_at):
                 return "skipped"
-            try:
-                result = service.refresh(day, observed_at)
-                if result.status == "ok":
-                    store.finish_auto_attempt(day, "success")
-                    return "success"
-                reason = result.message or "GitHub 更新失败"
-                store.save_refresh_failure(observed_at, reason)
-            except Exception as exc:
-                reason = f"更新失败：{exc}"
-                store.save_refresh_failure(observed_at, reason)
-            store.finish_auto_attempt(day, "error", reason)
-            record_error(store.data_dir, "auto-update", reason)
-            return "error"
+        try:
+            result = service.refresh(day, observed_at)
+            if result.status == "ok":
+                store.finish_auto_attempt(day, "success")
+                return "success"
+            reason = result.message or "GitHub 更新失败"
+            store.save_refresh_failure(observed_at, reason)
+        except Exception as exc:
+            reason = f"更新失败：{exc}"
+            store.save_refresh_failure(observed_at, reason)
+        store.finish_auto_attempt(day, "error", reason)
+        record_error(store.data_dir, "auto-update", reason)
+        return "error"
     except UpdateBusyError:
         record_error(store.data_dir, "auto-update", "已有任务正在运行，后台更新等待下一次触发")
         return "busy"

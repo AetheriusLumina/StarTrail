@@ -2,6 +2,18 @@
 
 // The Chinese source text is the lookup key so product copy stays readable beside its translation.
 const RADAR_EN = Object.freeze({
+  "软件更新":"Software update", "软件更新中…":"Updating software…", "发现新软件版本":"New software version available",
+  "可从左侧“软件更新”升级，保留原数据。":"Use Software update in the sidebar to upgrade and keep existing data.",
+  "关闭":"Close", "查看发布页":"View release", "下载并更新":"Download and update",
+  "安装程序会备份并保留原数据，然后更新软件。下载及校验完成后，当前程序会退出；在安装程序中确认即可继续。":"The installer backs up and preserves existing data before updating the app. After download and verification, the reader exits; confirm in the installer to continue.",
+  "正在检查软件版本":"Checking software versions", "当前已是最新可用软件版本":"This is the latest available software version",
+  "下载并校验安装包，之后打开升级程序":"Downloading and verifying the installer; the upgrade wizard opens afterwards",
+  "校验通过，准备打开升级程序":"Verification passed; opening the upgrade wizard",
+
+  "归类":"Classify", "创建文件夹并归类":"Create a folder and classify",
+  "正在读取文件夹…":"Loading folders…", "正在保存…":"Saving…",
+  "可选择多个文件夹；全部取消则放入未分类。":"Choose multiple folders, or leave all unchecked to keep it unfiled.",
+  "旧解读尚未注明类型，可更新解读补充。":"This older explanation has no project type. Regenerate it to add one.",
   "本地更新服务响应超时，请重试；不会重复启动已有更新。":"The local update service timed out. Retry; an existing update will not be started twice.",
   "GitHub 授权已失效，请重新登录；暂用公开请求更新。":"GitHub authorization is no longer valid. Sign in again; public requests are being used for now.",
   "GitHub 授权续期暂未完成，将稍后重试；暂用公开请求更新。":"GitHub authorization could not be renewed yet. It will be retried later; public requests are being used for now.",

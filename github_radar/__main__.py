@@ -117,6 +117,9 @@ def _main(
     account = GitHubAccount(store.data_dir, client_id=publisher_client_id())
     service = RadarService(client or GitHubClient(token_provider=account.access_token,on_auth_failure=account.reject_token), store,
                            TrendingClient() if client is None else None)
+    if client is None:
+        from .search_jobs import install_search
+        install_search(service)
     if args.scheduled_refresh:
         from .daily_update import run_scheduled_update
         from .browser_launcher import handoff_scheduled_refresh
