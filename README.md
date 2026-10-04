@@ -222,7 +222,7 @@ StarTrail 是独立项目，不隶属于 GitHub、Trendshift 或各推荐项目�
 
 ## 开发与贡献
 
-采用 **Python 标准库后端 + 原生 HTML/CSS/JavaScript + SQLite**。按职责组织模块，保留现有数据和运行身份，方便逐步修改。完整维护规则见 [开发指南](docs/DEVELOPMENT.md)。
+采用 **Python 标准库后端 + 原生 HTML/CSS/JavaScript + SQLite**。按职责组织模块，保留现有数据和运行身份，方便逐步修改。完整维护规则见 [开发指南](docs/DEVELOPMENT.md)，更新记录见 [开发日志](docs/CHANGELOG.md)，继续修改前先读 [产品对接与 AI 接续](docs/AI_HANDOFF.md)。
 
 <details>
 <summary>查看架构图、代码目录与修改入口</summary>

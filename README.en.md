@@ -221,7 +221,7 @@ History, follows, settings, and translations stay on your computer. Fetching pub
 
 ## Development and contributing
 
-The application uses a **Python standard-library backend, native HTML/CSS/JavaScript, and SQLite**. Modules have distinct responsibilities, and existing data and runtime identifiers remain compatible. The [development guide (Chinese)](docs/DEVELOPMENT.md) provides complete maintenance rules.
+The application uses a **Python standard-library backend, native HTML/CSS/JavaScript, and SQLite**. Modules have distinct responsibilities, and existing data and runtime identifiers remain compatible. The [development guide (Chinese)](docs/DEVELOPMENT.md) provides complete maintenance rules. See the [development log (Chinese)](docs/CHANGELOG.md) for changes and the [AI handoff guide (Chinese)](docs/AI_HANDOFF.md) before continuing development.
 
 <details>
 <summary>Architecture, directory layout, and change entry points</summary>
