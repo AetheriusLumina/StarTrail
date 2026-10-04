@@ -3,7 +3,7 @@ const source=fs.readFileSync(require('node:path').join(__dirname,'../github_rada
 const nodes=new Map();const byId=id=>{if(!nodes.has(id))nodes.set(id,{hidden:true,textContent:'',disabled:false,listeners:{},addEventListener(k,v){this.listeners[k]=v;},showModal(){this.open=true;},close(){this.open=false;},focus(){}});return nodes.get(id);};
 let timers=new Map(),seq=0,calls=[],saved=new Map();const context={window:{},setTimeout(f,ms){const id=++seq;timers.set(id,{f,ms});return id;},clearTimeout(id){timers.delete(id);}};
 vm.runInNewContext(source,context);
-const update=context.window.RadarSoftwareUpdate.create({byId,tr:x=>x,post:async(path,body)=>{calls.push([path,body]);return {status:'downloading',release};},api:async()=>state,remember:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
+const update=context.window.RadarSoftwareUpdate.create({byId,tr:x=>x,post:async(path,body)=>{calls.push([path,body]);return path.endsWith('/check')?{status:'checking',current:state.current}:{status:'downloading',release};},api:async()=>state,remember:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
 const release={tag:'v0.5.0-preview.2',notes:'<script>not executable</script>',url:'https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.5.0-preview.2'};
 let state={status:'available',current:'v0.5.0-preview.1',installable:true,release};
 (async()=>{
@@ -16,5 +16,21 @@ let state={status:'available',current:'v0.5.0-preview.1',installable:true,releas
  update.render(state);byId('software-update-button').listeners.click();assert.equal(byId('software-update-dialog').open,true);assert.equal(byId('software-update-notes').textContent,release.notes);
  await byId('software-update-install').listeners.click();assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['/api/software-update/install',{confirmed:true}]]);
  update.render({...state,installable:false});assert.equal(byId('software-update-install').disabled,true);assert.equal(byId('software-release-link').hidden,false);
+ calls.length=0;
+ update.render({status:'up_to_date',current:state.current,message:'当前已是最新可用软件版本'});
+ assert.equal(byId('settings-software-check').disabled,false);
+ await byId('settings-software-check').listeners.click();
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['/api/software-update/check',{}]]);
+ assert.equal(byId('settings-software-check').disabled,true);
+ assert.equal(byId('software-update-button').hidden,true,'checking does not invent an installable release');
+ state={status:'up_to_date',current:state.current,message:'当前已是最新可用软件版本'};
+ await update.start();
+ assert.equal(byId('settings-software-check').disabled,false);
+ assert.equal(byId('settings-software-status').textContent,state.message);
+ assert.equal(byId('software-update-button').hidden,true);
+ assert.equal(calls.length,1,'manual version check never starts installer or data refresh');
+ update.render({status:'error',current:state.current,message:'Network unavailable'});
+ assert.equal(byId('settings-software-status').textContent,'Network unavailable');
+ assert.equal(byId('settings-software-check').disabled,false);
  update.close();assert.equal(timers.size,0);console.log('Software update notification and confirmation passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

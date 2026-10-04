@@ -2,6 +2,7 @@
 
 // The Chinese source text is the lookup key so product copy stays readable beside its translation.
 const RADAR_EN = Object.freeze({
+  "软件版本":"Software version", "检查软件更新":"Check for software updates", "仅检查安装包版本，不更新项目数据或使用 AI 额度。":"Checks installer versions only; does not refresh projects or use AI quota.",
   "软件更新":"Software update", "软件更新中…":"Updating software…", "发现新软件版本":"New software version available",
   "可从左侧“软件更新”升级，保留原数据。":"Use Software update in the sidebar to upgrade and keep existing data.",
   "关闭":"Close", "查看发布页":"View release", "下载并更新":"Download and update",

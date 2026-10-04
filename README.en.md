@@ -29,7 +29,7 @@ No Python, Node.js, or development tools are needed to use the installer.
 <summary>Software upgrades and existing data</summary>
 
 1. Anonymous startup and periodic checks look for a newer release with both a complete installer and a valid SHA256 checksum.
-2. A notification appears at the top for ten seconds and can be closed manually. The Software update button stays in the sidebar.
+2. A notification closes automatically after ten seconds and can be dismissed earlier. The Software update sidebar button appears only when a new installer is detected. In Settings, Check for software updates actively checks whether the installed version is current, without refreshing project data or using AI quota.
 3. Confirm before downloading. Size and SHA256 are checked during download and again before launching the installer. The installer stops the reader, backs up UserData, then replaces app files.
 4. A manually downloaded installer follows the same upgrade procedure, recognizes the existing installation, and preserves data. Internal GitHub Radar identifiers remain for compatibility.
 5. Update now fetches project data; Software update upgrades the application. Source runs link to the installer rather than replacing the development checkout. See the [user guide](docs/USER_GUIDE.md) for installation and recovery details.

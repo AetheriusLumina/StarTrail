@@ -13,7 +13,7 @@ from urllib.request import Request,urlopen
 from urllib.parse import urlsplit
 
 REPOSITORY='AetheriusLumina/StarTrail'
-RELEASE_TAG='v0.5.0-preview.2'
+RELEASE_TAG='v0.5.0-preview.3'
 RELEASE_CHANNEL='preview'
 CHECK_INTERVAL=6*60*60
 API='https://api.github.com/repos/'+REPOSITORY+'/releases?per_page=100'

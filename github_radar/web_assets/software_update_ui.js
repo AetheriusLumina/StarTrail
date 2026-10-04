@@ -1,11 +1,14 @@
 "use strict";
 window.RadarSoftwareUpdate={create({byId,api,post,tr,reveal=()=>{},remember}) {
-  let state={},poll=null,expiry=null,stopped=false;
+  let state={},poll=null,expiry=null,stopped=false,generation=0;
   const seen=new Set();
   function dismiss(){if(expiry!==null)clearTimeout(expiry);expiry=null;byId('software-update-toast').hidden=true;}
   function render(next){
     state=next||{};const release=state.release;
     const pending=['downloading','ready'].includes(state.status);
+    byId('settings-software-version').textContent=state.current||'';
+    byId('settings-software-status').textContent=state.message?tr(state.message):'';
+    byId('settings-software-check').disabled=pending||state.status==='checking';
     byId('software-update-button').hidden=!release;
     byId('software-update-button').textContent=tr(pending?'软件更新中…':'软件更新');
     byId('software-update-version').textContent=release?`${state.current} → ${release.tag}`:state.current||'';
@@ -27,12 +30,25 @@ window.RadarSoftwareUpdate={create({byId,api,post,tr,reveal=()=>{},remember}) {
   }
   async function load(){
     if(stopped)return;
-    try{render(await api('/api/software-update'));}
-    catch(error){byId('software-update-message').textContent=error.message;}
+    const requestGeneration=generation;
+    try{const next=await api('/api/software-update');if(!stopped&&requestGeneration===generation)render(next);}
+    catch(error){if(!stopped&&requestGeneration===generation){byId('software-update-message').textContent=error.message;byId('settings-software-status').textContent=error.message;byId('settings-software-check').disabled=false;}}
     if(poll!==null)clearTimeout(poll);
     if(!stopped)poll=setTimeout(load,['downloading','ready','checking'].includes(state.status)?1500:1800000);
   }
   function open(){byId('software-update-dialog').showModal();reveal(byId('software-update-dialog'));}
+  // The explicit settings action bypasses the six-hour automatic check interval.
+  // It checks fixed Releases metadata only, without downloading or running AI.
+  byId('settings-software-check').addEventListener('click',async()=>{
+    if(stopped||byId('settings-software-check').disabled)return;
+    const requestGeneration=++generation;
+    byId('settings-software-check').disabled=true;
+    byId('settings-software-status').textContent=tr('正在检查软件版本');
+    try{const next=await post('/api/software-update/check',{});if(!stopped&&requestGeneration===generation)render(next);}
+    catch(error){if(!stopped&&requestGeneration===generation){byId('settings-software-status').textContent=error.message;byId('settings-software-check').disabled=false;}}
+    if(poll!==null)clearTimeout(poll);
+    if(!stopped)poll=setTimeout(load,1500);
+  });
   byId('software-update-button').addEventListener('click',open);
   byId('software-update-toast-close').addEventListener('click',dismiss);
   byId('software-update-dialog-close').addEventListener('click',()=>byId('software-update-dialog').close());
