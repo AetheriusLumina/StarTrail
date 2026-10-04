@@ -3,6 +3,7 @@
 import hashlib
 import json
 import threading
+from datetime import datetime
 from dataclasses import replace
 
 from .ai_types import AIProgress, AIRepositoryInput, CandidateBatch
@@ -29,7 +30,7 @@ class AIService:
             raise RuntimeError("AI 分析已取消")
 
     def candidate_batch(self, local_date: str, keyword_id: int,
-                        model_id: str | None, limit: int = 20) -> CandidateBatch:
+                        model_id: str | None, limit: int = 20, *, observed_at: str | None = None) -> CandidateBatch:
         if not 1 <= limit <= 20:
             raise ValueError("每批 AI 候选必须在 1 到 20 个之间")
         rule = next((rule for rule in self.store.list_keywords()
@@ -46,7 +47,7 @@ class AIService:
         selected = []
         selected_ids = set()
 
-        def include(repository, rank=None):
+        def include(repository, rank=None, observed_at=None):
             self._ensure_active()
             if (repository.id in selected_ids or repository.id in checked
                     or repository.archived or repository.stars < rule.min_stars):
@@ -57,7 +58,7 @@ class AIService:
                 excerpt = None
             self._ensure_active()
             # An excerpt is bounded, so it cannot establish that the whole README was read.
-            selected.append(AIRepositoryInput(repository, excerpt, True, rank))
+            selected.append(AIRepositoryInput(repository, excerpt, True, rank, observed_at))
             selected_ids.add(repository.id)
 
         own_repos = self.store.repositories_for_ids(own_ids)
@@ -86,7 +87,7 @@ class AIService:
                 offset += 1
                 if repository.id in historical or repository.id in occupied:
                     continue
-                include(repository, (page - 1) * 100 + offset)
+                include(repository, (page - 1) * 100 + offset, observed_at or datetime.now().astimezone().isoformat())
             if offset >= len(candidates):
                 page += 1
                 offset = 0
@@ -107,7 +108,7 @@ class AIService:
                 repo_id in known and known[repo_id].verdict == "relevant"
                 for repo_id in current):
             return self.store.ai_progress(local_date, keyword_id, model_id)
-        batch = self.candidate_batch(local_date, keyword_id, model_id)
+        batch = self.candidate_batch(local_date, keyword_id, model_id, observed_at=checked_at)
         if not batch.inputs:
             return self.store.ai_progress(local_date, keyword_id, model_id)
         self._ensure_active()

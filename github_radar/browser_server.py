@@ -1015,8 +1015,8 @@ class BrowserServer:
                                                 None, followed_at)
         if recommendation is None:
             return None
-        snapshot = (self.store.snapshots_on(history_date, [repo_id])
-                    if history_date else self.store.snapshots_before("9999-12-31", [repo_id])).get(repo_id)
+        snapshot = (self.store.snapshots_on(source_date, [repo_id])
+                    if source_date else self.store.snapshots_before("9999-12-31", [repo_id])).get(repo_id)
         shown = replace(repository, stars=snapshot.stars) if snapshot else repository
         keyword_rules = self.store.all_keywords()
         keyword_terms = {item.id: item.term for item in keyword_rules}

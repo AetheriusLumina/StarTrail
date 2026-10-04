@@ -279,14 +279,30 @@ class RadarStore:
                 SELECT DISTINCT local_date, section, COALESCE(keyword_id, 0)
                 FROM recommendations"""
             )
+            from .search_storage import initialize_search_schema
+            initialize_search_schema(connection)
+            # Visibility survives replacing a current-day ranking. Discovery alone
+            # never fires these triggers and therefore cannot consume future slots.
+            connection.execute("""CREATE TABLE IF NOT EXISTS displayed_repositories (
+                repo_id INTEGER NOT NULL, local_date TEXT NOT NULL,
+                PRIMARY KEY(repo_id,local_date))""")
+            connection.execute("INSERT OR IGNORE INTO displayed_repositories SELECT repo_id,local_date FROM recommendations")
+            connection.execute("INSERT OR IGNORE INTO displayed_repositories SELECT repo_id,local_date FROM ai_removed_recommendations")
+            connection.execute("""CREATE TRIGGER IF NOT EXISTS record_visible_insert
+                AFTER INSERT ON recommendations BEGIN
+                INSERT OR IGNORE INTO displayed_repositories VALUES(NEW.repo_id,NEW.local_date); END""")
+            connection.execute("""CREATE TRIGGER IF NOT EXISTS record_visible_delete
+                BEFORE DELETE ON recommendations BEGIN
+                INSERT OR IGNORE INTO displayed_repositories VALUES(OLD.repo_id,OLD.local_date); END""")
             self._migrate_legacy_growth(connection)
 
     @staticmethod
     def _seen_before(connection: sqlite3.Connection, local_date: str) -> set[int]:
         return {row['repo_id'] for row in connection.execute(
             'SELECT repo_id FROM recommendations WHERE local_date<? UNION '
-            'SELECT repo_id FROM ai_removed_recommendations WHERE local_date<?',
-            (local_date, local_date))}
+            'SELECT repo_id FROM ai_removed_recommendations WHERE local_date<? UNION '
+            'SELECT repo_id FROM displayed_repositories WHERE local_date<?',
+            (local_date, local_date, local_date))}
 
     def seen_repo_ids_before(self, local_date: str) -> set[int]:
         with closing(self._connect()) as connection:
@@ -761,7 +777,7 @@ class RadarStore:
     def seen_repo_ids(self) -> set[int]:
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                "SELECT repo_id FROM recommendations UNION SELECT repo_id FROM ai_removed_recommendations"
+                "SELECT repo_id FROM recommendations UNION SELECT repo_id FROM ai_removed_recommendations UNION SELECT repo_id FROM displayed_repositories"
             ).fetchall()
         return {row["repo_id"] for row in rows}
 
@@ -1011,6 +1027,16 @@ class RadarStore:
                     (repo.id, repo.full_name, repo.html_url, repo.description,
                      json.dumps(repo.topics), repo.language, repo.stars, int(repo.archived)),
                 )
+                # Cached metadata carries no new observation timestamp. In particular,
+                # judging an old card cannot manufacture today's Star snapshot.
+                if item.observed_at is not None:
+                    if datetime.fromisoformat(item.observed_at).date().isoformat() != local_date:
+                        raise ValueError("仓库观察日期与快照日期不一致")
+                    connection.execute("""INSERT INTO snapshots VALUES(?,?,?,?)
+                        ON CONFLICT(repo_id,local_date) DO UPDATE SET
+                        stars=excluded.stars,observed_at=excluded.observed_at
+                        WHERE excluded.observed_at>=snapshots.observed_at""",
+                        (repo.id,local_date,repo.stars,item.observed_at))
                 verdict = decisions[repo.id]
                 connection.execute(
                     """INSERT INTO ai_verdicts
@@ -1046,31 +1072,38 @@ class RadarStore:
                     VALUES (?, ?, ?, ?, ?)""",
                     (local_date, keyword_id, repo_id, checked_at, judged[repo_id]),
                 )
-            current = [row["repo_id"] for row in connection.execute(
-                """SELECT repo_id FROM recommendations WHERE local_date=?
-                AND section='keyword' AND keyword_id=?""",
-                (local_date, keyword_id),
-            ).fetchall()]
-            candidates = connection.execute(
-                """SELECT v.repo_id, v.candidate_rank FROM ai_verdicts AS v
-                JOIN repositories AS repo ON repo.id=v.repo_id
-                WHERE v.local_date=? AND v.keyword_id=? AND v.model_key=?
-                  AND v.verdict='relevant'
-                  AND NOT EXISTS (SELECT 1 FROM recommendations AS rec
-                                  WHERE rec.repo_id=v.repo_id)
-                  AND NOT EXISTS (SELECT 1 FROM ai_removed_recommendations AS removed
-                                  WHERE removed.repo_id=v.repo_id)
-                ORDER BY repo.stars DESC, v.repo_id LIMIT ?""",
-                (local_date, keyword_id, model_key, max(0, 5 - len(current))),
-            ).fetchall()
+            # Compare the complete eligible frontier rather than just filling holes.
+            # A lower-Star incumbent is allowed to leave, while its visibility is
+            # retained by the delete trigger for cross-day de-duplication.
+            candidates = connection.execute("""SELECT repo.id,
+                COALESCE(v.candidate_rank,rec.rank) AS candidate_rank
+                FROM repositories repo
+                LEFT JOIN ai_verdicts v ON v.repo_id=repo.id AND v.local_date=?
+                    AND v.keyword_id=? AND v.model_key=?
+                LEFT JOIN recommendations rec ON rec.repo_id=repo.id AND rec.local_date=?
+                    AND rec.section='keyword' AND rec.keyword_id=?
+                WHERE (v.verdict='relevant' OR (rec.repo_id IS NOT NULL AND v.verdict IS NULL))
+                    AND repo.archived=0
+                    AND repo.stars >= (SELECT min_stars FROM keywords WHERE id=?)
+                    AND NOT EXISTS (SELECT 1 FROM displayed_repositories d
+                                    WHERE d.repo_id=repo.id AND d.local_date<?)
+                    AND NOT EXISTS (SELECT 1 FROM recommendations other
+                        WHERE other.repo_id=repo.id AND other.local_date=?
+                          AND NOT(other.section='keyword' AND other.keyword_id=?))
+                ORDER BY repo.stars DESC,repo.id LIMIT 5""",
+                (local_date,keyword_id,model_key,local_date,keyword_id,keyword_id,
+                 local_date,local_date,keyword_id)).fetchall()
+            chosen = {r['id'] for r in candidates}
+            for row in existing:
+                if row['repo_id'] not in chosen:
+                    connection.execute("DELETE FROM recommendations WHERE local_date=? AND repo_id=? AND section='keyword' AND keyword_id=?",
+                                       (local_date,row['repo_id'],keyword_id))
             for row in candidates:
-                connection.execute(
-                    """INSERT INTO recommendations
-                    (repo_id, local_date, section, keyword_id, star_delta, baseline_at,
-                     observed_at, position, metric_basis, metric_date, rank)
-                    VALUES (?, ?, 'keyword', ?, NULL, NULL, ?, 0, NULL, NULL, ?)""",
-                    (row["repo_id"], local_date, keyword_id, checked_at, row['candidate_rank']),
-                )
+                connection.execute("""INSERT OR IGNORE INTO recommendations
+                    (repo_id,local_date,section,keyword_id,star_delta,baseline_at,
+                     observed_at,position,metric_basis,metric_date,rank)
+                    VALUES(?,?,'keyword',?,NULL,NULL,?,0,NULL,NULL,?)""",
+                    (row['id'],local_date,keyword_id,checked_at,row['candidate_rank']))
             ordered = connection.execute(
                 """SELECT rec.repo_id, rec.section, rec.keyword_id FROM recommendations AS rec
                 JOIN repositories AS repo ON repo.id=rec.repo_id
