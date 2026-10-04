@@ -171,7 +171,7 @@ class CodexConnection:
         session = _Session(process, self.RPC_TIMEOUT, error_file)
         try:
             session.request("initialize", {"clientInfo": {
-                "name": "github_radar", "title": "StarTrail", "version": "0.4.0",
+                "name": "github_radar", "title": "StarTrail", "version": "0.5.0",
             }})
             session.notify("initialized")
             return session

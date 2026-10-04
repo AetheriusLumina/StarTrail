@@ -6,9 +6,9 @@
 
 1. 星迹 · StarTrail 采用 Python 标准库后端、原生网页、SQLite 和默认浏览器，Windows x64 优先。内部包名、EXE、AppId、任务和数据标识继续兼容 GitHub Radar。
 2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。
-3. 本轮公开安装包仍待最终构建发布。源码实现和测试通过不等于新安装包已经上线；发布标签、冻结程序和隔离安装结果必须在开发日志记录实际证据。
-4. 已执行的完整回归为 542 项通过；后续检索边界 25 项、升级服务与启动 11 项及 Node 更新交互通过。Inno 新备份语法已编译，所用旧冻结目录不能当作新包验收。最终回归、独立复核、真实 AI 限额验证及新冻结/安装验收仍须完成。
-5. 正式用户数据未用于开发测试；真实 AI 验证目前零调用，整个交付最多三次。不能让自动测试访问私人账号或执行批量付费任务。
+3. 运行版本 0.5.0，拟发布标签 v0.5.0-preview.1。新本机安装包已构建并隔离验收；GitHub 发布状态以实际 Release 为准，发布后在开发日志记录。
+4. 完整 556 项隔离回归通过，包含 Node 更新交互。独立复核发现的九类边界问题均补回归修复；额外补扩词失败公共路径。真实 AI 三次验收通过，观察到五次实际搜索事件。新冻结资源一致、双向离线翻译、本机 API 和退出通过；隔离中文路径真实安装、覆盖升级、完整备份、数据保留、快捷方式 ICO、备份拒绝停止覆盖通过。
+5. 正式用户数据未用于开发测试；真实 AI 验证严格三次，未执行自动二百候选验收。安装验收仅更换测试 AppId/注册键/快捷方式名，程序和备份逻辑未变，避免覆盖真实安装；第二台干净 Windows 和跨夜长期运行仍未验收。
 
 ## 2. 模块与运行链路
 
@@ -66,6 +66,14 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 | POST /api/quit | 空对象 | 取消搜索、解释、预译、下载并停止服务 |
 
 前端更新模块只在新可安装版本时显示侧栏入口。页面顶部消息十秒自动关闭，也可手动关闭；同版同浏览器会话不反复提醒。确认对话框才下载，不能启动就保留当前应用并反馈错误。
+
+### 新增接口的明确参数
+
+1. `GET /api/search/keywords/{id}/expansion` 返回 `original`、`terms`、`topics`、`version`；尚无缓存时 terms/topics 为空。POST 同一路径只接受 `{"terms":["agent skills","智能体技能"]}`，最多六个，每个1～120字符；保留原关键词及已选主题，扩词哈希变化使旧发布失效。写入返回同一结构，未知关键词404，格式错误400；这是修改检索表达，不启动付费任务。
+2. `POST /api/following/{id}/classify` 严格接受 `{"ids":[1,2],"create_name":null}`，或带创建名称。成功返回 `followed:true`、最终 `ids` 和带 id/name/count 的 `folders`。已有关注允许空 ids 保存未分类；未关注且既不选文件夹也不创建则400，不暗中关注。重复名称400、不存在404、数据库/文件错误503，全部回滚。
+3. `POST /api/following/{id}/folders` 拖动请求为 `{"action":"move","source":"1","target":"2"}`；未分类用字符串 `unfiled`，数字文件夹 ID 也使用字符串。全部关注 `all` 不是合法来源/目标。来源归属已变化400，目标不存在404，成功返回最终 `ids`。旧的 `{"ids":[1]}` 设置分类和 `move_unfiled` 请求仍兼容。
+4. `GET /api/issue` 的 search_progress 含 module/day/job、status/stage、collected/unique/cache_hits/newly_checked/pending 和 expansion_calls/search_calls/judgment_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
+5. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；can_install 标明是否冻结安装版，downloaded/total 用于进度。
 
 ## 5. 存储、失效和并发
 
