@@ -5,6 +5,7 @@ import codecs
 import base64
 import binascii
 import socket
+from threading import RLock
 import time
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
@@ -20,6 +21,8 @@ from .readme_types import ReadmeFetch
 
 class GitHubRequestError(Exception):
     """A request failed or returned data the application cannot trust."""
+    def __init__(self,message,*,status=None,path=None):
+        super().__init__(message);self.status=status;self.path=path
 
 
 class GitHubRateLimitError(GitHubRequestError):
@@ -41,6 +44,10 @@ class GitHubClient:
         self.search_reset_at: int | None = None
         self.budget, self.clock = budget, clock
         self._last_headers = {}
+        self._quota_lock = RLock()
+        self._auth_recovery_lock = RLock()
+        self._auth_epoch = 0
+        self.request_cache = None
         self.token_provider = token_provider
         self.on_auth_failure=on_auth_failure
 
@@ -50,20 +57,26 @@ class GitHubClient:
             authorization=request.get_header('Authorization')
             if exc.code!=401 or not authorization:raise
             exc.close()
-            if self.on_auth_failure:self.on_auth_failure(authorization.removeprefix('Bearer '))
-            # A rotated token or anonymous request has a different quota identity.
-            self.remaining=self.core_remaining=self.search_remaining=None
-            self.reset_at=self.core_reset_at=self.search_reset_at=None
-            headers={k:v for k,v in request.header_items() if k.lower()!='authorization'}
-            updated=self._authorization() if self.on_auth_failure else {}
-            if updated.get('Authorization')!=authorization:headers.update(updated)
-            if self.budget is not None:
-                self.budget.core_remaining=self.budget.search_remaining=None
-                self.budget._core_probe=self.budget._search_probe=False
-                resource='search' if urlparse(request.full_url).path.startswith('/search/') else 'core'
-                try:self.budget.spend(resource,1,self.clock())
-                except ValueError as error:raise GitHubRequestError('GitHub 请求预算或更新时间已到限制') from error
-                timeout=min(timeout,self.budget.deadline-self.clock())
+            # A delayed 401 from the previous credential must not reopen the
+            # fresh identity's reserved quota after another reader recovered it.
+            with self._auth_recovery_lock:
+                epoch=getattr(request,'_radar_auth_epoch',self._auth_epoch)
+                if epoch==self._auth_epoch:
+                    if self.on_auth_failure:self.on_auth_failure(authorization.removeprefix('Bearer '))
+                    self._auth_epoch+=1
+                    with self._quota_lock:
+                        self.remaining=self.core_remaining=self.search_remaining=None
+                        self.reset_at=self.core_reset_at=self.search_reset_at=None
+                        if self.budget is not None:self.budget.reset_identity()
+                headers={k:v for k,v in request.header_items() if k.lower()!='authorization'}
+                updated=self._authorization() if self.on_auth_failure else {}
+                if updated.get('Authorization')!=authorization:headers.update(updated)
+                request._radar_auth_epoch=self._auth_epoch
+                if self.budget is not None:
+                    resource='search' if urlparse(request.full_url).path.startswith('/search/') else 'core'
+                    try:self.budget.spend(resource,1,self.clock())
+                    except ValueError as error:raise GitHubRequestError('GitHub 请求预算或更新时间已到限制') from error
+                    timeout=min(timeout,self.budget.deadline-self.clock())
             retry=Request(request.full_url,headers=headers)
             # One recovery only; never loop on a rejected credential.
             return self._opener(retry,timeout=timeout)
@@ -93,8 +106,12 @@ class GitHubClient:
         total = payload.get("total_count", len(payload["items"]))
         if isinstance(total, bool) or not isinstance(total, int) or total < 0:
             raise GitHubRequestError("GitHub 搜索结果数量格式有误")
-        return SearchPage(tuple(self._repository(item) for item in payload["items"]),
-                          total, payload.get("incomplete_results") is True)
+        items=tuple(self._repository(item) for item in payload['items'])
+        if self.request_cache:
+            for item,raw in zip(items,payload['items']):
+                parts=item.full_name.split('/')
+                self.request_cache.put(f"/repos/{quote(parts[0],safe='')}/{quote(parts[1],safe='')}",{key:raw[key] for key in ('id','full_name','html_url','description','topics','language','stargazers_count','archived') if key in raw})
+        return SearchPage(items,total,payload.get('incomplete_results') is True)
 
     def public_repository_page(self, since: int | None) -> DiscoveryBatch:
         if since is not None and (isinstance(since, bool) or not isinstance(since, int) or since < 0):
@@ -242,6 +259,12 @@ class GitHubClient:
                           for offset, count in enumerate(week.days))
         return sorted(result, key=lambda item: item.stat_date)
 
+    def has_cached_star_history(self,full_name):
+        parts=full_name.split('/')
+        if len(parts)!=2 or self.request_cache is None:return False
+        path=f"/repos/{quote(parts[0],safe='')}/{quote(parts[1],safe='')}/stargazers/history?per_page=2"
+        return self.request_cache.get(path) is not None
+
     def star_history_weeks(self, full_name: str) -> list[OfficialStarWeek]:
         parts = full_name.split("/")
         if len(parts) != 2 or not all(parts):
@@ -267,6 +290,9 @@ class GitHubClient:
         return sorted(result, key=lambda item: item.week)
 
     def _get_json(self, path: str):
+        cache=self.request_cache if path.startswith('/repos/') and (len(path.split('?')[0].split('/'))==4 or '/stargazers/history?' in path) else None
+        cached=cache.get(path) if cache else None
+        if cached is not None:return cached
         timeout = 20
         if self.budget is not None:
             resource = "search" if path.startswith("/search/") else "core"
@@ -275,46 +301,58 @@ class GitHubClient:
             except ValueError as exc:
                 raise GitHubRequestError("GitHub 请求预算或更新时间已到限制") from exc
             timeout = min(timeout, self.budget.deadline - self.clock())
+        with self._auth_recovery_lock:
+            authorization=self._authorization();epoch=self._auth_epoch
         request = Request(
             f"{self.BASE_URL}{path}",
             headers={
                 "User-Agent": "GitHubRadar/0.1",
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
-                **self._authorization(),
+                **authorization,
             },
         )
+        request._radar_auth_epoch=epoch
         try:
             with self._open_authenticated(request, timeout=timeout) as response:
-                self._capture_limit(response.headers, path)
+                self._capture_limit(response.headers, path, request._radar_auth_epoch)
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise GitHubRequestError("GitHub 响应超过 10 MB 限制")
-                return json.loads(raw.decode("utf-8"))
+                payload=json.loads(raw.decode('utf-8'))
+                if cache:
+                    minimal=payload
+                    if isinstance(payload,dict):minimal={key:payload[key] for key in ('id','full_name','html_url','description','topics','language','stargazers_count','archived') if key in payload}
+                    cache.put(path,minimal)
+                return payload
         except HTTPError as exc:
-            self._capture_limit(exc.headers, path)
+            self._capture_limit(exc.headers, path, request._radar_auth_epoch)
             if exc.code == 429 or (exc.code == 403 and self.remaining == 0):
                 raise GitHubRateLimitError(self.reset_at) from exc
-            raise GitHubRequestError(f"GitHub 请求失败（HTTP {exc.code}）") from exc
+            raise GitHubRequestError(f"GitHub 请求失败（HTTP {exc.code}）",status=exc.code,path=path) from exc
         except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
             raise GitHubRequestError("连接 GitHub 失败，请检查网络") from exc
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise GitHubRequestError("GitHub 返回了无法读取的数据") from exc
 
-    def _capture_limit(self, headers, path: str) -> None:
-        self._last_headers = dict(headers.items())
-        if self.budget is not None:
-            self.budget.observe(headers)
-        lowered = {str(key).lower(): value for key, value in headers.items()}
-        self.remaining = self._header_int(lowered.get("x-ratelimit-remaining"))
-        self.reset_at = self._header_int(lowered.get("x-ratelimit-reset"))
-        resource = lowered.get("x-ratelimit-resource") or ("search" if path.startswith("/search/") else "core")
-        if resource == "core":
-            self.core_remaining = self.remaining
-            self.core_reset_at = self.reset_at
-        elif resource == "search":
-            self.search_remaining = self.remaining
-            self.search_reset_at = self.reset_at
+    def _capture_limit(self, headers, path: str, epoch=None) -> None:
+        with self._quota_lock:
+            if epoch is not None and epoch!=self._auth_epoch:return
+            self._last_headers = dict(headers.items())
+            if self.budget is not None:
+                self.budget.observe(headers)
+            lowered = {str(key).lower(): value for key, value in headers.items()}
+            self.remaining = self._header_int(lowered.get("x-ratelimit-remaining"))
+            self.reset_at = self._header_int(lowered.get("x-ratelimit-reset"))
+            resource = lowered.get("x-ratelimit-resource") or ("search" if path.startswith("/search/") else "core")
+            if self.budget is not None and resource in ("core", "search"):
+                self.remaining = getattr(self.budget, resource + "_remaining")
+            if resource == "core":
+                self.core_remaining = self.remaining
+                self.core_reset_at = self.reset_at
+            elif resource == "search":
+                self.search_remaining = self.remaining
+                self.search_reset_at = self.reset_at
 
     def renew_expired_quotas(self, now=None):
         """A passed server reset permits one fresh probe, never assumes a quota."""

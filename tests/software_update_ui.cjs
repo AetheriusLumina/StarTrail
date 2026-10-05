@@ -1,9 +1,9 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync(require('node:path').join(__dirname,'../github_radar/web_assets/software_update_ui.js'),'utf8');
 const nodes=new Map();const byId=id=>{if(!nodes.has(id))nodes.set(id,{hidden:true,textContent:'',disabled:false,listeners:{},addEventListener(k,v){this.listeners[k]=v;},showModal(){this.open=true;},close(){this.open=false;},focus(){}});return nodes.get(id);};
-let timers=new Map(),seq=0,calls=[],saved=new Map();const context={window:{},setTimeout(f,ms){const id=++seq;timers.set(id,{f,ms});return id;},clearTimeout(id){timers.delete(id);}};
+let failFetch=false,handovers=0;let timers=new Map(),seq=0,calls=[],saved=new Map();const context={window:{},setTimeout(f,ms){const id=++seq;timers.set(id,{f,ms});return id;},clearTimeout(id){timers.delete(id);}};
 vm.runInNewContext(source,context);
-const update=context.window.RadarSoftwareUpdate.create({byId,tr:x=>x,post:async(path,body)=>{calls.push([path,body]);return path.endsWith('/check')?{status:'checking',current:state.current}:{status:'downloading',release};},api:async()=>state,remember:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
+const update=context.window.RadarSoftwareUpdate.create({byId,tr:x=>x,post:async(path,body)=>{calls.push([path,body]);return path.endsWith('/cancel')?{status:'cancelled',current:state.current,message:'已取消软件更新并清理自动下载包',release,installable:true}:path.endsWith('/check')?{status:'checking',current:state.current}:{status:'downloading',release};},api:async()=>{if(failFetch)throw Error('Failed to fetch');return state;},onHandoff:()=>{handovers++;},remember:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
 const release={tag:'v0.5.0-preview.2',notes:'<script>not executable</script>',url:'https://github.com/AetheriusLumina/StarTrail/releases/tag/v0.5.0-preview.2'};
 let state={status:'available',current:'v0.5.0-preview.1',installable:true,release};
 (async()=>{
@@ -42,5 +42,18 @@ let state={status:'available',current:'v0.5.0-preview.1',installable:true,releas
  update.notifyFailure({...failure,attempted_at:'2026-10-05T14:00:00Z'});assert.equal(byId('software-update-toast').hidden,false);
  const failureExpiry=[...timers.values()].find(t=>t.ms===10000);failureExpiry.f();assert.equal(byId('software-update-toast').hidden,true);
  assert.equal(byId('software-update-button').hidden,true,'data failure does not expose a software update button');
+ update.render({...state,status:'error',message:'安装包校验失败，当前软件和数据保持完整',installable:true,cancellable:true,release});
+ assert.equal(byId('software-update-dialog-close').textContent,'取消更新并删除安装包');
+ assert.ok(byId('software-update-toast-text').textContent.includes('校验失败'));
+ calls.length=0;await byId('software-update-dialog-close').listeners.click();
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['/api/software-update/cancel',{}]]);
+ assert.equal(byId('software-update-dialog').open,false);
+ state={status:'downloading',current:state.current,release,downloaded:8,total:8,installable:true};
+ update.render(state);failFetch=true;await update.start();
+ assert.equal(handovers,0);
+ failFetch=false;state={status:'error',message:'安装包校验失败，当前软件和数据保持完整',cancellable:true};
+ await update.start();assert.equal(handovers,0);assert.equal(byId('software-update-dialog-close').textContent,'取消更新并删除安装包');
+ state={status:'installing',message:'安装程序已经打开'};await update.start();assert.equal(handovers,1);assert.ok(byId('software-update-message').textContent.includes('任务栏'));
+ assert.ok(!byId('software-update-message').textContent.includes('Failed to fetch'));
  update.close();assert.equal(timers.size,0);console.log('Software update notification and confirmation passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

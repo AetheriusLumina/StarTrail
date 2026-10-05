@@ -56,12 +56,34 @@ class SearchJobs:
         try:
             if not self.store.mark_search_incomplete(day, True, lease=lease, now=self.now().timestamp()):
                 raise ValueError('当前更新已被其他任务替代，已保存结果保留')
-            for module in scopes:
-                if self._event.is_set() or not self.store.load_search_enabled():break
-                self._active=self.factory()
-                p=self._active.run(module,cancel_event=self._event)
-                self.progress.append(p)
-                search.renew_run(lease,now=self.now().timestamp(),ttl=1900)
+            engines=[self.factory() for _ in scopes];iterators=[];latest=[None]*len(scopes);done=[False]*len(scopes)
+            prior_cache=getattr(self.service.client,'request_cache',None)
+            from .github_client import GitHubClient
+            from .search_storage import SearchRequestCache
+            if isinstance(self.service.client,GitHubClient):self.service.client.request_cache=SearchRequestCache(self.store)
+            try:
+                for index,(engine,module) in enumerate(zip(engines,scopes)):
+                    engine.can_publish=lambda index=index:all(done[:index])
+                    if hasattr(engine,'run_steps'):iterators.append(engine.run_steps(module,cancel_event=self._event))
+                    else:
+                        def compatibility(engine=engine,module=module):
+                            if False:yield None
+                            return engine.run(module,cancel_event=self._event)
+                        iterators.append(compatibility())
+                while not all(done):
+                    if self._event.is_set() or not self.store.load_search_enabled():break
+                    for index,(engine,iterator) in enumerate(zip(engines,iterators)):
+                        if self._event.is_set() or not self.store.load_search_enabled():break
+                        if done[index]:continue
+                        if latest[index] is not None and latest[index].stage=='publishing' and not engine.can_publish():continue
+                        self._active=engine
+                        try:latest[index]=next(iterator)
+                        except StopIteration as complete:latest[index]=complete.value;done[index]=True
+                    search.renew_run(lease,now=self.now().timestamp(),ttl=1900)
+                self.progress=[p for p,complete in zip(latest,done) if p is not None and complete]
+            finally:
+                for iterator in iterators:iterator.close()
+                if isinstance(self.service.client,GitHubClient):self.service.client.request_cache=prior_cache
             interrupted=len(self.progress)<len(scopes) or any(p.status not in ('done','partial') for p in self.progress)
             if not self.store.mark_search_incomplete(day, interrupted, lease=lease, now=self.now().timestamp()):
                 raise ValueError('当前更新已被其他任务替代，已保存结果保留')

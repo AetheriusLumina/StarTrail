@@ -13,7 +13,7 @@ let homeScroll = 0;
 let pollTimer = null;
 let savedIssueTimer = null;
 let quitting = false;
-const softwareUpdates=window.RadarSoftwareUpdate?.create({byId,api,post,tr,reveal:node=>cardTransition.reveal(node),remember:sessionStorage});
+const softwareUpdates=window.RadarSoftwareUpdate?.create({byId,api,post,tr,reveal:node=>cardTransition.reveal(node),remember:sessionStorage,onHandoff:softwareHandoff});
 let didInitialRefresh = false;
 let aiConnection = {ready: false, reason: "正在检查 AI 连接…", models: [], selected_model: null};
 let aiPollTimer = null;
@@ -656,13 +656,13 @@ function renderIssue(issue) {
   for (const group of issue.keyword_groups || [])
     if (group.cards.length < 5) shortage.push(language === "en"
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
-  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 分批核实',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
-  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'AI checking',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
   byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>p.status==='running');
   if(byId('search-cancel').hidden)byId('search-cancel').disabled=false;
-  const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').map(p=>
-    language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · collected ${p.collected}, checked ${p.newly_checked}, cache ${p.cache_hits}, pending ${p.pending}`:
-    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 收集 ${p.collected}，新核实 ${p.newly_checked}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
+  const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').sort((a,b)=>Number(b.status==='running')-Number(a.status==='running')).map(p=>
+    language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · read ${p.collected}, candidate library ${p.candidate_pool||p.unique||0}, submitted ${p.newly_checked}, completed ${p.checked_completed||0}, cache ${p.cache_hits}, pending ${p.pending}`:
+    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 读取 ${p.collected}，候选库 ${p.candidate_pool||p.unique||0}，AI 已提交 ${p.newly_checked}，已完成 ${p.checked_completed||0}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
   if(issue.busy&&progress.length)setStatus(progress.join(" · "), "busy");
   byId("issue-notes").textContent = [...new Set([...progress,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
   if (pollTimer) clearTimeout(pollTimer);
@@ -673,6 +673,7 @@ function renderIssue(issue) {
 async function loadIssue() {
   try {
     const issue = await api("/api/issue");
+    if(quitting)return;
     renderIssue(issue);
     historyLoaded = false;
     if (issue.status === "empty" && !didInitialRefresh && location.pathname === "/") {
@@ -680,6 +681,7 @@ async function loadIssue() {
       await startRefresh();
     }
   } catch (error) {
+    if(quitting)return;
     setStatus(error.message, "error");
     softwareUpdates?.notifyFailure({attempted_at:"connection:"+error.message,reason:localizeServerText(error.message)});
     byId("refresh-button").disabled = !token;
@@ -1481,6 +1483,14 @@ function navLink(event) {
   pageScroll.set(location.pathname+location.search, window.scrollY);
   return transitionPage(()=>{history.replaceState({}, "", destination);return route({transition:true});},
     {reverse:event.currentTarget.id==='history-calendar-back'});
+}
+
+function softwareHandoff(){
+  quitting=true;translationController.close();cancelReadmePolling();
+  for(const timer of [pollTimer,savedIssueTimer,aiPollTimer,detailPollTimer,githubPollTimer])if(timer)clearTimeout(timer);
+  byId('refresh-button').disabled=true;byId('keyword-input').disabled=true;
+  byId('keyword-form').querySelector('button').disabled=true;byId('quit-button').disabled=true;
+  setStatus(tr('更新连接已结束，请检查任务栏中的安装窗口；完成安装后重新打开 StarTrail。若没有安装窗口，请重新打开软件重试。'),'');
 }
 
 async function quitApp() {

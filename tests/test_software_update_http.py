@@ -16,6 +16,7 @@ class Updater:
     def state(self):return {'status':'available','current':'v0.5.0-preview.1','release':{'tag':'v0.5.0-preview.2'},'installable':True}
     def check(self,force=False):self.calls.append(force);return self.state()
     def start(self,callback):self.callback=callback;return {'status':'downloading'}
+    def cancel(self):self.calls.append('cancel');return {'status':'cancelled'}
     def close(self):self.closed=True
 
 class UpgradeHTTPTests(unittest.TestCase):
@@ -48,5 +49,12 @@ class UpgradeHTTPTests(unittest.TestCase):
         finally:gate.set();self.server._worker.join()
         self.assertEqual(self.request('/api/software-update/install',{'confirmed':True})[0],202)
         self.assertIsNotNone(self.updater.callback)
+    def test_cancel_is_authenticated_and_never_accepts_arbitrary_paths(self):
+        self.assertEqual(self.request('/api/software-update/cancel',{},False)[0],403)
+        self.assertEqual(self.request('/api/software-update/cancel',{'path':'elsewhere'})[0],400)
+        self.assertEqual(self.request('/api/software-update/cancel',{})[1]['status'],'cancelled')
+        self.assertEqual(self.updater.calls[-1],'cancel')
+        self.server._quitting=True
+        self.assertEqual(self.request('/api/software-update/cancel',{})[0],409)
     def test_closing_cancels_updater(self):
         self.server.close();self.assertTrue(self.updater.closed)

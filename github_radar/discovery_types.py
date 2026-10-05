@@ -1,5 +1,6 @@
 """Candidate discovery and source evidence, separate from recommendations."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import RLock
 import re
 
 from .models import Repository
@@ -71,34 +72,44 @@ class RequestBudget:
     core_reserve: int = 10
     _core_probe: bool = False
     _search_probe: bool = False
+    _lock: object = field(default_factory=RLock, repr=False, compare=False)
 
     def can_spend(self, resource: str, cost: int, now: float) -> bool:
-        if isinstance(cost, bool) or cost < 1 or now >= self.deadline:
-            return False
-        if resource == "external":
-            return True
-        if resource not in ("core", "search"):
-            raise ValueError("未知请求额度类型")
-        remaining = getattr(self, resource + "_remaining")
-        if remaining is None:
-            return cost == 1 and not getattr(self, "_" + resource + "_probe")
-        reserve = self.core_reserve if resource == "core" else 0
-        return remaining - cost >= reserve
+        with self._lock:
+            if isinstance(cost, bool) or cost < 1 or now >= self.deadline:
+                return False
+            if resource == "external":
+                return True
+            if resource not in ("core", "search"):
+                raise ValueError("未知请求额度类型")
+            remaining = getattr(self, resource + "_remaining")
+            if remaining is None:
+                return cost == 1 and not getattr(self, "_" + resource + "_probe")
+            reserve = self.core_reserve if resource == "core" else 0
+            return remaining - cost >= reserve
 
     def spend(self, resource: str, cost: int, now: float) -> None:
-        if not self.can_spend(resource, cost, now):
-            raise ValueError("请求预算或更新时间已到限制")
-        if resource == "external":
-            return
-        field = resource + "_remaining"
-        if getattr(self, field) is None:
-            setattr(self, "_" + resource + "_probe", True)
-        else:
-            setattr(self, field, getattr(self, field) - cost)
+        with self._lock:
+            if not self.can_spend(resource, cost, now):
+                raise ValueError("请求预算或更新时间已到限制")
+            if resource == "external":
+                return
+            field = resource + "_remaining"
+            if getattr(self, field) is None:
+                setattr(self, "_" + resource + "_probe", True)
+            else:
+                setattr(self, field, getattr(self, field) - cost)
 
     def observe(self, headers) -> None:
-        headers = {str(k).lower(): str(v) for k, v in headers.items()}
-        resource = headers.get("x-ratelimit-resource")
-        value = headers.get("x-ratelimit-remaining", "")
-        if resource in ("core", "search") and value.isdecimal():
-            setattr(self, resource + "_remaining", int(value))
+        with self._lock:
+            headers = {str(k).lower(): str(v) for k, v in headers.items()}
+            resource = headers.get("x-ratelimit-resource")
+            value = headers.get("x-ratelimit-remaining", "")
+            if resource in ("core", "search") and value.isdecimal():
+                current = getattr(self, resource + "_remaining")
+                setattr(self, resource + "_remaining", int(value) if current is None else min(current, int(value)))
+
+    def reset_identity(self):
+        with self._lock:
+            self.core_remaining = self.search_remaining = None
+            self._core_probe = self._search_probe = False

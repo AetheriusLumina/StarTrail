@@ -68,15 +68,15 @@ These are actual usage screenshots. Projects, dates, rankings, and figures refle
 <details>
 <summary>Search, verification, ranking, and quota rules</summary>
 
-1. Growth candidates come from public GitHub searches, recent projects, activity samples, tracked repositories, GitHub Trending, Trendshift, and active AI web discovery. Popularity signals discover candidates; they do not replace daily Star counts.
-2. The authoritative growth metric is a positive daily addition from GitHub statistics for the latest complete UTC day. AI checks identity, dates, and metric meaning. Sort by daily additions, total Stars, then repository identity.
-3. Previously displayed projects in the growth top five appear as compact returning entries without consuming the five new-discovery slots.
-4. Keyword expansion preserves the original term and adds a few bilingual synonyms and applicable Trendshift topics. The expanded terms can be inspected and corrected in the interface.
-5. GitHub searches names, descriptions, and READMEs using those terms. Public trend pages and AI web searches supply additional candidates. Official metadata resolves identities, refreshes total Stars, and merges duplicates.
-6. Verify substantive relevance before sorting by official total Stars. Apply the minimum-Star threshold and archive filter, exclude previously displayed projects and other modules' occupied slots, and keep merely collected candidates eligible for later discovery.
-7. Refresh facts daily while reusing unchanged semantic judgments from disk. Check at most twenty repositories per batch and two hundred new judgments per module per day by default. Repeated updates do not reset usage. Manual continuation can add up to two hundred judgments.
-8. When new results are insufficient, allow at most one additional AI gap search within the task budget, then merge and rerank. Rate limits, incomplete pages, failures, and insufficient candidates remain visible; exhaustive coverage of all relevant GitHub repositories is not promised.
-9. Switching saved pages does not run discovery. Update now is independent of the scheduled time, and duplicate clicks reuse the running update. The sidebar shows the current stage and counts. Sleep pauses network work, and due updates are checked after resume. A failure notice explains the reason, dismisses after ten seconds or on request, and remains available in Settings.
+1. Collect first from paginated and partitioned GitHub search, Trending, Trendshift, tracked candidates, and active AI web discovery. Merge by authoritative repository identity while preserving sources.
+2. Growth uses validated official additions for the latest complete UTC day, sorted by daily additions, total Stars, and repository ID. AI may discover candidates; it does not reassess every growth count.
+3. Returning projects in the growth top five remain compact entries and do not consume five new-discovery slots.
+4. Preserve the original keyword and add up to six focused expressions and applicable topics. Inspect or correct them in the interface.
+5. After merging candidates, give AI the eligible catalog in one invocation to classify relevance, irrelevance, and uncertainty. The application sorts relevant repositories by official total Stars; model-generated popularity numbers are never facts.
+6. Apply archive and minimum-Star filters and exclude past displayed projects. Resolve today's cross-module occupancy after preceding rankings publish, so released slots do not discard valid candidates prematurely.
+7. Refresh the covered sources daily and reuse unchanged semantic judgments from disk. Allow one automatic catalog analysis per keyword per day; repeated updates preserve reserved usage. Expansion, web discovery, and explicit manual continuation are separate calls. Prepare at most two hundred README excerpts per round and keep remaining candidates with public metadata, rather than ending relevance analysis at two hundred candidates.
+8. Catalog inputs have explicit size and model-context limits. If a limit or validation fails, explain the reason and preserve results. Network delays, quotas, incomplete pages, and uncertain evidence remain visible; exhaustive GitHub coverage is not promised. Local merging and ranking prioritize speed; external network and AI waits are shown separately.
+9. Modules advance in turn and publish in their original order. The sidebar distinguishes source reads, candidate-library size, submitted and completed AI decisions, cache hits, and pending work. Saved-page navigation does not search; duplicate clicks reuse active work. Due checks resume after sleep, and failures use a dismissible ten-second notice.
 
 </details>
 

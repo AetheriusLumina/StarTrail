@@ -13,7 +13,7 @@ from urllib.request import Request,urlopen
 from urllib.parse import urlsplit
 
 REPOSITORY='AetheriusLumina/StarTrail'
-RELEASE_TAG='v0.5.0-preview.4'
+RELEASE_TAG='v0.5.0-preview.5'
 RELEASE_CHANNEL='preview'
 CHECK_INTERVAL=6*60*60
 API='https://api.github.com/repos/'+REPOSITORY+'/releases?per_page=100'
@@ -133,12 +133,12 @@ class SoftwareUpdater:
     def __init__(self,data_dir,*,client=None,current=RELEASE_TAG,channel=RELEASE_CHANNEL,clock=time.monotonic):
         self.data_dir=Path(data_dir);self.client=client or ReleaseClient();self.current=current;self.channel=channel
         self.clock=clock;self.last_check=None;self.release=None
-        self._lock=threading.Lock();self._cancel=threading.Event();self._worker=None
+        self._lock=threading.Lock();self._cancel=threading.Event();self._worker=None;self._download_release=None
         self._state={'status':'idle','current':current,'channel':channel,'message':'','downloaded':0,'total':0}
 
     def state(self):
         with self._lock:
-            return {**self._state,'release':asdict(self.release) if self.release else None,'installable':bool(getattr(sys,'frozen',False))}
+            return self.state_unlocked()
 
     def _set(self,**changes):
         with self._lock:self._state.update(changes)
@@ -151,7 +151,9 @@ class SoftwareUpdater:
             self._worker=threading.Thread(target=self._check,daemon=True);self._worker.start()
             return self.state_unlocked()
 
-    def state_unlocked(self):return {**self._state,'release':asdict(self.release) if self.release else None,'installable':bool(getattr(sys,'frozen',False))}
+    def state_unlocked(self):
+        return {**self._state,'release':asdict(self.release) if self.release else None,'installable':bool(getattr(sys,'frozen',False)),
+            'cancellable':self._download_release is not None and self._state['status'] in ('downloading','ready','error','cancelling')}
 
     def _check(self):
         try:
@@ -166,18 +168,52 @@ class SoftwareUpdater:
             if self._worker and self._worker.is_alive():return self.state_unlocked()
             if not self.release:raise SoftwareUpdateError('尚未检测到新安装包')
             if not getattr(sys,'frozen',False):raise SoftwareUpdateError('源码运行请从发布页下载并安装；不会覆盖源码目录')
-            self._cancel=threading.Event();release=self.release
-            self._state.update(status='downloading',message='下载并校验安装包，之后打开升级程序')
+            self._cancel=threading.Event();release=self.release;self._download_release=release
+            self._state.update(status='downloading',message='下载并校验安装包，之后打开升级程序',downloaded=0,total=0)
             def download():
                 try:
                     target=download_installer(release,self.data_dir/'.software-updates',cancel_event=self._cancel,
                         on_progress=lambda n,total:self._set(downloaded=n,total=total))
-                    if self._cancel.is_set():return
+                    if self._cancel.is_set():self._clean_cancelled();return
                     self._set(status='ready',message='校验通过，准备打开升级程序')
                     on_ready(target,release)
-                except Exception as exc:self._set(status='error',message=str(exc)[:300])
+                except Exception as exc:
+                    if self._cancel.is_set():self._clean_cancelled()
+                    else:self._set(status='error',message=str(exc)[:300])
             self._worker=threading.Thread(target=download,daemon=True);self._worker.start()
             return self.state_unlocked()
+
+    @property
+    def cancel_requested(self):return self._cancel.is_set()
+
+    def _clean_cancelled(self):
+        try:
+            release=self._download_release
+            if release:
+                version(release.tag)
+                root=self.data_dir.resolve()/'.software-updates'
+                if root.is_symlink() or root.resolve()!=root:
+                    raise SoftwareUpdateError('自动下载目录已改变，未删除文件；请检查原目录')
+                target=root/(release.tag+'-StarTrail_Setup.exe')
+                for path in (target,target.with_suffix('.part')):
+                    if path.is_symlink() or path.resolve().parent!=root:
+                        raise SoftwareUpdateError('自动下载文件位置无效，未删除文件')
+                    path.unlink(missing_ok=True)
+            self._set(status='cancelled',message='已取消软件更新并清理自动下载包',downloaded=0,total=0)
+        except (OSError,SoftwareUpdateError):
+            self._set(status='error',message='软件更新已取消，但自动下载包清理失败；可能被占用或目录权限不足，可重试清理')
+
+    def cancel(self):
+        with self._lock:
+            if self._state['status']=='checking':
+                raise SoftwareUpdateError('请等待版本检查完成再清理安装包')
+            if self._state['status']=='installing':
+                raise SoftwareUpdateError('安装程序已经打开，请在安装窗口中取消；不会删除使用中的安装包')
+            self._cancel.set()
+            self._state.update(status='cancelling',message='正在取消更新并清理自动下载包')
+            running=bool(self._worker and self._worker.is_alive())
+        if not running:self._clean_cancelled()
+        return self.state()
 
     def close(self):self._cancel.set()
 

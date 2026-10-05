@@ -76,6 +76,9 @@ class SearchProgress:
     expansion_calls: int = 0
     search_calls: int = 0
     judgment_calls: int = 0
+    catalog_calls: int = 0
+    checked_completed: int = 0
+    candidate_pool: int = 0
     limited: bool = False
     notes: tuple[str,...] = ()
 

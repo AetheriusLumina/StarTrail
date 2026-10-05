@@ -1,9 +1,10 @@
 """Collect official metadata and public evidence with resumable, bounded queries."""
 import json
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date,datetime,timedelta
-from .github_client import GitHubRequestError
+from .github_client import GitHubClient, GitHubRequestError
 from .public_http import SourceRequestError
 from .search_storage import SearchStore,scope_key
 from .search_types import ObservedRepository
@@ -17,6 +18,7 @@ class SearchSources:
     def __init__(self,client,store,trending,trendshift,clock,free_events=None):
         self.client,self.store,self.trending,self.trendshift,self.clock=client,store,trending,trendshift,clock
         self.free_events=free_events
+        self.metadata_workers=2
         self.search=SearchStore(store);self.notes=[];self.limited=False;self.collected=0
 
     def _call(self,budget,resource,func,*args,**kwargs):
@@ -40,6 +42,9 @@ class SearchSources:
         return (fresh if saved['date']!=scope.local_date else [])+saved['queue'] or fresh
 
     def _search_range(self,scope,term,start,end,budget,cancel_event,on_progress):
+        for _ in self._search_range_steps(scope,term,start,end,budget,cancel_event,on_progress):pass
+
+    def _search_range_steps(self,scope,term,start,end,budget,cancel_event,on_progress):
         queue=self._queue(scope,term,start,end)
         while queue and not cancel_event.is_set() and budget.can_spend('search',1,self.clock()):
             item=queue[0];stars=f"stars:>={item['low']}" if item['high'] is None else f"stars:{item['low']}..{item['high']}"
@@ -67,6 +72,7 @@ class SearchSources:
                 if item['page']*100<min(page.total_count,1000) and len(page.items)==100:queue[0]=dict(item,page=item['page']+1)
                 else:queue.pop(0)
             self._save_cursor(scope,term,queue)
+            yield None
         if queue:self.limited=True
         self._save_cursor(scope,term,queue)
 
@@ -74,17 +80,61 @@ class SearchSources:
         if not valid_repository_name(candidate.full_name):return None
         try:
             repo=self._call(budget,'core',self.client.get_repository,candidate.full_name)
-            if candidate.repo_id is not None and candidate.repo_id!=repo.id:
-                self.notes.append('候选仓库身份变化，未覆盖原ID');return None
-            observed=datetime.now().astimezone().isoformat()
-            evidence=tuple(replace(e,repo_id=repo.id,full_name=repo.full_name) for e in candidate.evidence)
-            self.store.save_discovery_batch(DiscoveryBatch('verified',
-                (replace(candidate,repo_id=repo.id,full_name=repo.full_name,cached_repo=repo,evidence=evidence),),None,True,()))
-            return ObservedRepository(repo,observed)
+            return self._accept_candidate(candidate,repo)
         except (GitHubRequestError,ValueError,OSError) as exc:
             self.notes.append(str(exc));self.limited=True;return None
 
+    def _accept_candidate(self,candidate,repo):
+        if candidate.repo_id is not None and candidate.repo_id!=repo.id:
+            self.notes.append('候选仓库身份变化，未覆盖原ID');return None
+        observed=datetime.now().astimezone().isoformat()
+        evidence=tuple(replace(e,repo_id=repo.id,full_name=repo.full_name) for e in candidate.evidence)
+        self.store.save_discovery_batch(DiscoveryBatch('verified',
+            (replace(candidate,repo_id=repo.id,full_name=repo.full_name,cached_repo=repo,evidence=evidence),),None,True,()))
+        return ObservedRepository(repo,observed)
+
+    def _collect_metadata_steps(self,candidates,scope,budget,cancel_event,on_progress):
+        # Only network waits overlap. Evidence and SQLite writes remain ordered
+        # on this thread, with at most two requests/results in memory.
+        resolved={};index=0
+        workers=min(2,max(1,self.metadata_workers)) if isinstance(self.client,GitHubClient) else 1
+        with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='metadata') as pool:
+            while index<len(candidates):
+                if cancel_event.is_set():self.limited=True;break
+                candidate=candidates[index];key=candidate.full_name.casefold()
+                known=resolved.get(key) or self.search.observation_named_today(scope,candidate.full_name)
+                if known:
+                    self._accept_candidate(candidate,known.repo);resolved[key]=known;index+=1;continue
+                if not budget.can_spend('core',1,self.clock()):
+                    self.notes.append('GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新')
+                    self.limited=True;break
+                width=workers if budget.can_spend('core',workers,self.clock()) else 1
+                batch=[];keys=set()
+                while index<len(candidates) and len(batch)<width:
+                    candidate=candidates[index];key=candidate.full_name.casefold()
+                    if key in keys or key in resolved:break
+                    index+=1
+                    if not valid_repository_name(candidate.full_name):continue
+                    keys.add(key)
+                    batch.append((candidate,pool.submit(self._call,budget,'core',self.client.get_repository,candidate.full_name)))
+                for candidate,future in batch:
+                    if cancel_event.is_set():self.limited=True;break
+                    try:observation=self._accept_candidate(candidate,future.result())
+                    except (GitHubRequestError,ValueError,OSError) as exc:
+                        if getattr(exc,'status',None)==404:
+                            self.notes.append('仓库 '+candidate.full_name+' 未找到或无访问权限（HTTP 404），已跳过，其他来源继续')
+                        else:self.notes.append(str(exc));self.limited=True
+                        continue
+                    if observation:
+                        resolved[candidate.full_name.casefold()]=observation
+                        self.search.save_candidates(scope,(observation,),())
+                        self.collected+=1;on_progress('collecting',self.collected)
+                yield None
+
     def collect(self,scope,expansion,ai_result,budget,cancel_event,on_progress):
+        for _ in self.collect_steps(scope,expansion,ai_result,budget,cancel_event,on_progress):pass
+
+    def collect_steps(self,scope,expansion,ai_result,budget,cancel_event,on_progress):
         self.notes=[];self.limited=False;self.collected=0
         prior={name:getattr(self.client,name,None) for name in ('budget','clock')}
         if hasattr(self.client,'budget'):self.client.budget=budget;self.client.clock=self.clock
@@ -118,31 +168,15 @@ class SearchSources:
                         if not batch.batch_finished:self.limited=True
                     except (SourceRequestError,ValueError,OSError) as exc:
                         self.notes.append('public_activity: '+str(exc));self.limited=True
-            resolved={}
-            for candidate in candidates:
-                if cancel_event.is_set():self.limited=True;break
-                key=candidate.full_name.casefold()
-                if key in resolved:
-                    observation=resolved[key]
-                    evidence=tuple(replace(e,repo_id=observation.repo.id,full_name=observation.repo.full_name) for e in candidate.evidence)
-                    self.store.save_discovery_batch(DiscoveryBatch('verified',
-                        (replace(candidate,repo_id=observation.repo.id,full_name=observation.repo.full_name,cached_repo=observation.repo,evidence=evidence),),None,True,()))
-                    continue
-                if not budget.can_spend('core',1,self.clock()):
-                    self.notes.append('GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新')
-                    self.limited=True;break
-                observation=self.resolve_candidate(candidate,budget)
-                if observation:
-                    resolved[key]=observation
-                    self.search.save_candidates(scope,(observation,),())
-                    self.collected+=1;on_progress('collecting',self.collected)
+            yield None
             terms=(scope.term,*(expansion.terms if expansion else ())) if scope.section=='keyword' else ('',)
             start=date(2007,1,1) if scope.section=='keyword' else date.fromisoformat(scope.local_date)-timedelta(days=30)
             for term in dict.fromkeys(terms):
                 if cancel_event.is_set() or not budget.can_spend('search',1,self.clock()):
                     if not cancel_event.is_set():self.notes.append('GitHub 搜索请求额度或时间预算不足，检索断点已保留；额度恢复后可继续更新')
                     self.limited=True;break
-                self._search_range(scope,term,start,date.fromisoformat(scope.local_date),budget,cancel_event,on_progress)
+                yield from self._search_range_steps(scope,term,start,date.fromisoformat(scope.local_date),budget,cancel_event,on_progress)
+            yield from self._collect_metadata_steps(candidates,scope,budget,cancel_event,on_progress)
         finally:
             if hasattr(self.client,'budget'):
                 self.client.budget=prior['budget'];self.client.clock=prior['clock']

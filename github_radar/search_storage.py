@@ -26,6 +26,8 @@ def initialize_search_schema(db):
             owner TEXT, expires_at REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL)""",
         'CREATE TABLE IF NOT EXISTS search_cursors (scope_key TEXT NOT NULL,source TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope_key,source))',
         'CREATE INDEX IF NOT EXISTS idx_search_candidate_page ON search_candidates(scope_key,repo_id)',
+        "CREATE INDEX IF NOT EXISTS idx_search_candidate_name ON search_candidates(scope_key,json_extract(payload,'$.full_name') COLLATE NOCASE)",
+        'CREATE TABLE IF NOT EXISTS search_http_cache(path TEXT PRIMARY KEY,run_id TEXT NOT NULL,payload TEXT NOT NULL)',
     ): db.execute(statement)
 
 def scope_key(scope):
@@ -78,6 +80,29 @@ class SearchStore:
             rows=db.execute('SELECT payload,observed_at FROM search_candidates WHERE scope_key=? AND repo_id>? ORDER BY repo_id LIMIT ?',
                             (scope_key(scope),after_id or 0,limit)).fetchall()
         return tuple(ObservedRepository(_repository(json.loads(r[0])),r[1]) for r in rows)
+
+    def observations_today(self,scope):
+        from .search_types import ObservedRepository
+        after=None
+        while page:=self.candidate_page(scope,after,100):
+            for item in page:
+                if datetime.fromisoformat(item.observed_at).astimezone().date().isoformat()==scope.local_date:yield item
+            after=page[-1].repo.id
+
+    def observation_named_today(self,scope,name):
+        with closing(self.store._connect()) as db:
+            row=db.execute("SELECT payload,observed_at FROM search_candidates WHERE scope_key=? AND json_extract(payload,'$.full_name')=? COLLATE NOCASE",(scope_key(scope),name)).fetchone()
+        if row and datetime.fromisoformat(row['observed_at']).astimezone().date().isoformat()==scope.local_date:
+            return ObservedRepository(_repository(json.loads(row['payload'])),row['observed_at'])
+        return None
+
+    def judgment_ids(self,scope,kind):
+        with closing(self.store._connect()) as db:
+            return {r[0] for r in db.execute('SELECT DISTINCT repo_id FROM search_judgments WHERE scope_key=? AND kind=?',(scope_key(scope),kind))}
+
+    def candidate_count(self,scope):
+        with closing(self.store._connect()) as db:
+            return db.execute('SELECT COUNT(*) FROM search_candidates WHERE scope_key=?',(scope_key(scope),)).fetchone()[0]
 
     def load_judgment(self,scope,repo_id,fingerprint,kind):
         with closing(self.store._connect()) as db:
@@ -142,7 +167,7 @@ class SearchStore:
             progress=SearchProgress(job_id,scope.section,scope.keyword_id,scope.local_date)
             if row:
                 previous=json.loads(row['payload'])
-                for field in ('newly_checked','expansion_calls','search_calls','judgment_calls'):
+                for field in ('newly_checked','expansion_calls','search_calls','judgment_calls','catalog_calls','checked_completed'):
                     progress=replace(progress,**{field:previous.get(field,0)})
             db.execute('INSERT INTO search_runs VALUES(?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET generation=excluded.generation,owner=excluded.owner,expires_at=excluded.expires_at,payload=excluded.payload',
                 (job_id,key,generation,owner,now+ttl,json.dumps(asdict(progress),ensure_ascii=False)))
@@ -254,3 +279,18 @@ class SearchLease:
     generation:int
     owner:str
     acquired:bool
+
+class SearchRequestCache:
+    """Same-refresh public GET facts on disk, never credentials or error bodies."""
+    def __init__(self,store):
+        self.store=store;self.run_id=uuid.uuid4().hex
+        with closing(store._connect()) as db,db:db.execute('DELETE FROM search_http_cache')
+    def get(self,path):
+        with closing(self.store._connect()) as db:
+            row=db.execute('SELECT payload FROM search_http_cache WHERE path=? AND run_id=?',(path,self.run_id)).fetchone()
+        return json.loads(row[0]) if row else None
+    def put(self,path,payload):
+        text=json.dumps(payload,ensure_ascii=False,separators=(',',':'))
+        if len(text.encode('utf-8'))>262144:return
+        with closing(self.store._connect()) as db,db:
+            db.execute('INSERT OR REPLACE INTO search_http_cache VALUES(?,?,?)',(path,self.run_id,text))

@@ -1,5 +1,8 @@
 """AI contributes search evidence, never authoritative IDs or Star statistics."""
 from datetime import datetime,timezone
+import json,tempfile
+from pathlib import Path
+from .ai_types import RelevanceVerdict
 from urllib.parse import urlsplit
 from .ai_provider import AIOutputError,_closed_object
 from .codex_runner import CodexRunner
@@ -66,6 +69,41 @@ class SearchProvider:
         if set(found)!=ids:raise AIOutputError('增长证据判断缺少仓库')
         return tuple(found[p.observation.repo.id] for p in inputs)
 
+
+    def filter_catalog(self,inputs,keyword,terms,model_id,*,timeout=120):
+        # One read-only invocation sees the entire merged candidate corpus.
+        # Compact columns avoid repeating field names and large README bodies.
+        ids=[i.repo.id for i in inputs]
+        if len(ids)!=len(set(ids)) or len(ids)>10000:raise AIOutputError('候选库过大或身份重复，已保留资料，请调整范围后继续')
+        description_limit=max(32,min(400,600000//max(len(inputs),1)-100))
+        readme_count=sum(bool(i.readme_excerpt) for i in inputs)
+        excerpt_limit=min(1200,180000//max(readme_count,1))
+        data={'original_keyword':keyword,'terms':list(terms),
+            'columns':['repo_id','full_name','stars','description','topics','language','readme_excerpt','source_limited'],
+            'repositories':[[i.repo.id,i.repo.full_name,i.repo.stars,i.repo.description[:description_limit],
+                [t[:40] for t in i.repo.topics[:4]],i.repo.language,
+                i.readme_excerpt[:excerpt_limit] if i.readme_excerpt else None,
+                i.source_limited or not i.readme_excerpt or len(i.readme_excerpt)>excerpt_limit] for i in inputs]}
+        schema=_closed_object({key:{'type':'array','maxItems':10000,'items':{'type':'integer'}}
+            for key in ('relevant_ids','irrelevant_ids','uncertain_ids')},['relevant_ids','irrelevant_ids','uncertain_ids'])
+        with tempfile.TemporaryDirectory(prefix='startrail-candidates-') as temporary:
+            file=Path(temporary)/'candidates.json'
+            with file.open('w',encoding='utf-8') as stream:json.dump(data,stream,ensure_ascii=False,separators=(',',':'))
+            if file.stat().st_size>1048576:raise AIOutputError('整组候选资料超过安全输入限制，未拆成反复AI调用；候选已保存，请调整范围或模型后继续')
+            result=self.runner.run('Compare ALL supplied repositories together against the original keyword and its focused synonyms. '
+                'Partition every supplied ID exactly once into relevant, irrelevant, or uncertain. Popularity alone does not establish relevance. '
+                'When descriptions or excerpts are insufficient, use uncertain, never guess. Do not rank or invent Stars. '
+                'The application will sort relevant repositories by authoritative total Stars.',None,schema,model_id,timeout=timeout,data_file=file)
+        if set(result)!=set(schema['required']):raise AIOutputError('整组相关性判断格式有误')
+        verdicts={};supplied=set(ids)
+        for status in ('relevant','irrelevant','uncertain'):
+            values=result[status+'_ids']
+            if not isinstance(values,list):raise AIOutputError('整组相关性判断格式有误')
+            for identity in values:
+                if type(identity) is not int or identity not in supplied or identity in verdicts:raise AIOutputError('整组判断包含错误或重复的仓库身份')
+                verdicts[identity]=RelevanceVerdict(identity,status,'整组候选依据公开名称、简介、主题及有限README统一判断；资料不足时标记不确定')
+        if set(verdicts)!=supplied:raise AIOutputError('整组判断没有覆盖全部提供的候选，原结果保留')
+        return tuple(verdicts[identity] for identity in ids)
 
     def filter_batch(self,inputs,keyword,model_id,*,timeout=120):
         previous=self.provider.TIMEOUT_SECONDS

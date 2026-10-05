@@ -2,6 +2,18 @@
 
 // The Chinese source text is the lookup key so product copy stays readable beside its translation.
 const RADAR_EN = Object.freeze({
+"取消更新并删除安装包":"Cancel update and delete installer",
+"关闭":"Close",
+"软件更新失败":"Software update failed",
+"取消软件更新未完成":"Software update cancellation did not finish",
+"已取消软件更新并清理自动下载包":"Software update cancelled; automatic download removed",
+"正在取消更新并清理自动下载包":"Cancelling the update and removing its automatic download",
+"软件更新已取消，但自动下载包清理失败；可能被占用或目录权限不足，可重试清理":"Update cancelled, but its download could not be removed. It may be in use or lack permissions; retry cleanup.",
+"本地更新服务连接中断，请重新打开 StarTrail。":"The local update service disconnected. Reopen StarTrail.",
+"安装程序已经打开，请查看任务栏中的安装窗口；完成安装后重新打开 StarTrail":"The installer has opened. Check the taskbar for its window and reopen StarTrail after installation.",
+"安装程序已经打开，请在安装窗口中取消；不会删除使用中的安装包":"The installer has opened. Cancel in its window; an installer in use will not be deleted.",
+"更新连接已结束，请检查任务栏中的安装窗口；完成安装后重新打开 StarTrail。若没有安装窗口，请重新打开软件重试。":"The update connection ended. Check the taskbar for the installer and reopen StarTrail after installation. If no installer appeared, reopen the app and retry.",
+
   "软件版本":"Software version", "检查软件更新":"Check for software updates", "仅检查安装包版本，不更新项目数据或使用 AI 额度。":"Checks installer versions only; does not refresh projects or use AI quota.",
   "软件更新":"Software update", "软件更新中…":"Updating software…", "发现新软件版本":"New software version available",
   "可从左侧“软件更新”升级，保留原数据。":"Use Software update in the sidebar to upgrade and keep existing data.",
@@ -23,7 +35,7 @@ const RADAR_EN = Object.freeze({
   "取消": "Cancel",
   "自动 AI 发现": "Automatic AI discovery",
   "停止本次检索": "Stop this discovery",
-  "开启后，数据更新自动扩词、联网搜索和分批核实，使用 Codex 账号额度；关闭后使用公共检索，手动 AI 操作仍可使用。": "When enabled, data updates expand terms, search the web and review batches using your Codex allowance. When disabled, public discovery remains available; manual AI actions still work.",
+  "开启后，数据更新自动扩词、联网搜索，并在合并候选后统一判断关键词相关性，使用 Codex 账号额度；增长按官方日增排序。关闭后使用公共检索，手动 AI 操作仍可使用。": "When enabled, updates expand terms, search the web and analyze the merged keyword candidates using your Codex allowance. Growth ranks by official daily additions. When disabled, public discovery and manual AI remain available.",
   "已保存自动 AI 设置。": "Automatic AI setting saved.",
   "正在停止检索，已保存的结果保留。": "Stopping discovery. Saved results are kept.",
   "AI 返回的项目依据格式不正确，原有结果已保留，请手动重新生成":"AI returned an invalid evidence format. Saved results have been kept; regenerate manually.",

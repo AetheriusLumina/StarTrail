@@ -4,11 +4,10 @@
 
 ## 1. 当前状态与交付门槛
 
-1. 星迹 · StarTrail 采用 Python 标准库后端、原生网页、SQLite 和默认浏览器，Windows x64 优先。内部包名、EXE、AppId、任务和数据标识继续兼容 GitHub Radar。
-2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。检索故障修复源码已接入；当前交付 v0.5.0-preview.4 已构建发布，并下载核对实际云端安装包和手册。
-3. 运行版本 0.5.0，当前交付标签 v0.5.0-preview.4。手动Windows流程测试/构建/校验/发布完成，最终交付采用实际公开下载并验证的云端安装包。本机构建产物直接运行验收通过；本轮安装未完成，正式软件未被覆盖。构建摘要和验收范围分别记录于开发日志。
-4. 本轮完整回归576项（67.519秒），包括Node十秒提示交互；独立复核无剩余重要问题，运行所有权竞态已补回归。直接运行本机构建产物的双向离线翻译、资源、失败API和退出通过；无害Windows任务注册/导出/幂等与清理通过。源码、云端CI和公开下载的实际结论集中开发日志；既往安装和三次真实AI验收见原版本记录。
-5. 本轮仅直接运行构建产物验收双语离线翻译/资源/失败API/退出，并实测无害Windows任务注册导出；本轮安装在位置保护处终止，按要求不再执行安装。此前的覆盖安装验收属于旧标签，不能充作本轮验收。正式用户数据未用于开发测试；既往真实 AI 验证累计三次，本轮零次；未执行自动二百候选验收。安装验收仅更换测试 AppId/注册键/快捷方式名，程序和备份逻辑未变，避免覆盖真实安装；第二台干净 Windows 和跨夜长期运行仍未验收。
+1. Python标准库后端、原生网页、SQLite、默认浏览器，Windows x64优先；旧包名、EXE、AppId和数据标识保持兼容。
+2. 当前代码正在准备 v0.5.0-preview.5；已发布资产仍为preview.4，不能把本地改动当作公开交付。合并检索、整组判断、低并发共享缓存、失败清理和网页交接已实现；最终验证与发布证据见开发日志。
+3. 正式安装及UserData未用于测试。本轮零真实AI调用，不运行安装器；隔离网络/AI模拟与直接冻结运行单独记录，不能当作真实大候选模型验收。
+4. 验收范围、源码标签、实际云包SHA、构建与检查结果统一写开发日志；第二台干净Windows、真实睡眠跨夜和大候选真实AI仍未验证。
 
 ### 更新恢复、状态与通知契约
 
@@ -36,19 +35,22 @@
 Python 文件在 github_radar/，网页模块在 github_radar/web_assets/，安装器在 packaging/。旧 service/discovery/ranking 仍供未连接 AI 和兼容入口使用；不要删除旧路径或把网络请求重新塞进长事务。
 
 1. __main__ 组装服务和真实 GitHubClient；BrowserServer 安装 SearchJobs。立即更新、定时更新和 CLI 共用调度规则。
-2. 自动 AI 开关开启且已连接 Codex 时，SearchJobs 串行处理增长及启用关键词；SearchCoordinator 扩词、主动搜索、多来源采集、官方解析、分批判断、排名、原子发布。未连接或自动 AI 关闭时使用公共 GitHub 路径并明确状态。
+2. 自动 AI 开关开启且已连接 Codex 时，SearchJobs轮流推进增长及启用关键词；SearchCoordinator扩词、主动搜索、多来源采集、官方解析、整组相关判断、排名、原子发布。未连接或自动 AI 关闭时使用公共 GitHub 路径并明确状态。
 3. 界面切页、打开已缓存详情或关注文件夹不触发批量检索。项目 AI 解释为手动操作，自动候选核实不会替所有候选生成六卡详情。
 4. 入选项目后台预译；内容不变复用硬盘译文。详情需要的译文准备好后呈现，避免结束动画后替换文字。旧画面即时移除，新真实 DOM 约 350ms 渐显。
 5. 软件升级与“立即更新”数据刷新分开。匿名启动检测、六小时节流；发现匹配的新安装包和哈希后才提供软件更新入口。
 
-## 3. 两个榜单的规则
+## 3. 两个榜单与任务规则
 
-1. 增长使用最近已结束的完整 UTC 日。北京时间 08:00 前，最近完整 UTC 日并不等于本机日历昨天。仅官方可核实的正日增参与增长排名；按日增、累计 Star、仓库 ID 排序。历史回归前五紧凑展示，不占五个新发现名额。
-2. 关键词保留用户原词，缓存最多六个相关表达及对应主题；AI 实际联网检索与 GitHub 搜索、Trending、Trendshift、跟踪候选合并。Trendshift 是发现来源，未上榜不是排除条件。
-3. 身份、归档状态和累计 Star 以 GitHub 解析结果为准。关键词必须相关且达到门槛，再按官方累计 Star 排序；历史已展示和当天其他模块占位排除。只搜索/核实过而没展示的项目不算历史展示。
-4. 每个模块、每日本地日期最多新增核实 200 个，20 个一批，调用前预留预算，失败或重复点击不重置。有效缓存不消耗新核实数；手动继续明确增加最多 200 个。自动主动搜索最多两次，第二次只为明确缺口；扩词和主动搜索与判断的调用次数分别记录。
-5. 每天重新采集当前计划覆盖范围，旧前沿必须刷新官方观察才可作为当天结果。语义内容未变可复用判断；增长证据按统计日更新。有限 API、网站和时间预算无法保证全站零遗漏。
-6. 限流、超时、取消、未解析候选和断点显示为部分完成或暂停，不写成全量完成。无法确认新结果时保留上次已保存结果及其真实日期。
+1. 多来源先收集：GitHub 分页及分区搜索、Trending、Trendshift、AI 主动联网搜索与持久候选库合并，按官方仓库 ID 去重，保留来源。先复用官方搜索页已有元数据，再解析其他来源的缺失身份；不能承诺全站穷尽。
+2. 增长榜不让 AI 逐仓库判断。官方 Star 历史经过原有周边界、完整 UTC 日校验，只使用目标日有效正日增；按日增、总 Star、ID 排序。历史前五回归和五个新发现名额保持。
+3. 关键词保留原词及最多六个相关扩展。候选合并完成后，将符合归档/Star/历史资格的整组资料一次交给 AI 判断相关、不相关、不确定，再由程序按官方累计 Star 排名。当天其他榜的占位留到前序榜发表后检查，不能提前丢失旧榜释放的候选。
+4. 整组输入最多10000个真实ID、1MiB，摘要按候选数压缩；每轮最多准备200份 README，其余仍携带名称、简介、主题、语言和官方数字，资料不足可判不确定。200不再是增长或关键词逐个AI判断上限。输入超限、模型上下文不足、遗漏/重复/虚构返回ID均保留旧结果并说明原因，不偷偷删候选或用模型数字。
+5. 默认每关键词每天最多一次整组分析。有效语义缓存复用；扩词、主动搜索另计调用。反复更新不会洗掉已预留调用，失败不自动重试；手动继续可明确重新分析整组，并继续准备资料。不能承诺一次调用固定Token或必然更省额度。
+6. 各模块按来源分页、最多两个官方GET、资料准备阶段轮流推进，AI仍一次一个调用；发表顺序增长→关键词原顺序保持。共享同轮公开元数据/日增磁盘缓存，下一次刷新失效；数据库短事务、原子配额、401同身份只恢复一次，取消后恢复共享客户端预算并释放租约。
+7. 最新时间要求是程序自身处理60秒内，排除外部网络与AI等待。整组AI最多600秒，扩词/搜索最多120秒，模块整体保护1800秒；不能把受理/提交/超时当完成。4000候选合成本机处理5.869秒、峰值工作集43.8MiB；这不是整应用或真实AI性能数据。
+8. 来源读取、持久去重库、AI提交、AI完成、缓存、待处理分别显示。单仓库404跳过并说明，不将整个来源误判失效；网络/认证/限流/预算各有原因。部分模块保存不代表整次成功，失败十秒可关闭提示和持久原因保留。原有睡眠补检查、每日三次自动尝试/一小时间隔不变。
+9. 软件升级失败可取消并删除仅本次自动下载文件；不删除手动安装包、其他版本缓存、UserData或备份。checking/installing禁止取消，下载中先停止再清理；启动安装器后状态installing短暂保留供网页接收。100%加Failed to fetch不等于已启动安装器。主题、图标、拖动、归类、六卡手动类型解释和离线翻译保持。
 
 ## 4. API 对接契约
 
@@ -81,14 +83,14 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 1. `GET /api/search/keywords/{id}/expansion` 返回 `original`、`terms`、`topics`、`version`；尚无缓存时 terms/topics 为空。POST 同一路径只接受 `{"terms":["agent skills","智能体技能"]}`，最多六个，每个1～120字符；保留原关键词及已选主题，扩词哈希变化使旧发布失效。写入返回同一结构，未知关键词404，格式错误400；这是修改检索表达，不启动付费任务。
 2. `POST /api/following/{id}/classify` 严格接受 `{"ids":[1,2],"create_name":null}`，或带创建名称。成功返回 `followed:true`、最终 `ids` 和带 id/name/count 的 `folders`。已有关注允许空 ids 保存未分类；未关注且既不选文件夹也不创建则400，不暗中关注。重复名称400、不存在404、数据库/文件错误503，全部回滚。
 3. `POST /api/following/{id}/folders` 拖动请求为 `{"action":"move","source":"1","target":"2"}`；未分类用字符串 `unfiled`，数字文件夹 ID 也使用字符串。全部关注 `all` 不是合法来源/目标。来源归属已变化400，目标不存在404，成功返回最终 `ids`。旧的 `{"ids":[1]}` 设置分类和 `move_unfiled` 请求仍兼容。
-4. `GET /api/issue` 的 search_progress 含 job_id/section/keyword_id/local_date、status/stage、collected/unique/cache_hits/newly_checked/pending 和 expansion_calls/search_calls/judgment_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
+4. `GET /api/issue` 的 search_progress 含 job_id/section/keyword_id/local_date、status/stage、collected/unique/candidate_pool/cache_hits/newly_checked/checked_completed/pending 和 expansion_calls/search_calls/judgment_calls/catalog_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
 5. `GET /api/search/settings` 返回 `{"enabled":true}`，缺省开启。POST 同路径严格接受布尔 `enabled`，短事务保存；关闭成功后取消当前 AI 检索。GET `/api/search/status` 返回本日 `jobs` 数组；POST `/api/search/cancel` 仅接受空对象，202 表示正在停止，不等于任务已退出。未知搜索路径404。自动关闭时数据刷新使用公共路径；显式手动继续仍可使用，模块之间停止返回部分完成及未执行说明。设置读取/保存以页面代次隔离，迟到 GET 不覆盖刚保存的额度选择。
-6. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；installable 标明是否冻结安装版，downloaded/total 用于进度。
+6. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready/cancelling/installing，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；installable 标明是否冻结安装版，downloaded/total 用于进度。
 
 ## 5. 存储、失效和并发
 
 1. RadarStore 管理 radar.db。repositories 是最新元数据，star_snapshots 是带真实 observed_at 的日期快照，recommendations 是当天入选上下文。displayed_repositories 保留实际展示历史；删除/替换当天卡片不擦掉已经展示的历史。
-2. SearchScope 包含模块/关键词、本地日、统计日、原词、门槛、模型、规则和扩词哈希。query_expansions、search_candidates、search_readmes、search_judgments、search_runs、search_cursors 管理扩词、观察、README、判断、租约/预算和来源断点。
+2. SearchScope 包含模块/关键词、本地日、统计日、原词、门槛、模型、规则和扩词哈希。query_expansions、search_candidates、search_readmes、search_judgments、search_runs、search_cursors、search_http_cache 管理扩词、观察、README、判断、租约/预算和来源断点。
 3. 语义缓存按模型、规则、关键词配置、README 内容指纹失效，排除 Star 和日期；证据缓存还包含官方统计日及出处。未知或旧 schema 的类型不自动花额度重解读。AI 类型使用 schema v3，含双语首行定性、证据和不确定状态。
 4. run lease 核对 owner/generation/expiry；同一天调整模型不会洗掉已花预算。发布事务重新验证日期、统计日、关键词启用/配置、扩词和当前模型，旧任务不得覆盖新设置或跨日结果。
 5. 网络和 AI 在数据库事务之外；frontier 分页读完关闭游标才处理。数据库写入短事务，更新租约有界；不要用延长锁时间代替并发设计。取消是状态，不是成功的空榜。
@@ -112,3 +114,12 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 5. 下次开发从 CHANGELOG 的最新实际证据开始；不要重复请求已获授权的实现，也不要把未发布草案当交付成功。
 
 设置手动检查入口 settings-software-check 复用 POST /api/software-update/check 空对象，force=True 绕过自动六小时节流；与正在进行的检查/下载复用任务。界面防重复、晚到GET以代次隔离，不启动数据更新、AI或下载。软件版本/结果显示在设置，侧栏仅有匹配新安装包时显示；提醒10000ms自动关闭并可提前关闭。
+
+## 整组分析与取消的具体对接
+
+1. `SearchProvider.filter_catalog(inputs, keyword, terms, model_id, timeout=600)`：真实ID去重、列格式压缩、临时JSON资料最多1MiB；名称/简介/主题/语言/Star/有限README全组供应。`CodexRunner.run(..., data_file=...)`读取该资料进入只读stdin，禁用本地shell/unified_exec/multi_agent；不是开放模型读取个人文件。
+2. 返回严格的`relevant_ids/irrelevant_ids/uncertain_ids`三个整数数组，必须互斥、无重复、无额外ID且覆盖全组；模型只判断语义，不计算Star排名。全部校验后同一事务持久化。失败预留的catalog_calls仍消耗一次自动预算；界面说明手动继续会重新分析并额外消耗额度。
+3. `SearchCoordinator.run_steps`在分页/两请求读取/每20份准备资料之后yield，`SearchJobs.refresh`轮转；yield前官方线程全部结束，客户端预算/时钟在resume和close两条路径恢复。`can_publish`等待前序模块结束，发表前按最新占位重排，事务再验证代次/日期/配置，保留原优先级。
+4. `SearchRequestCache`仅共享本次刷新公开元数据和Star历史，下一次清除；官方搜索页可直接补充已解析的元数据。SQLite存储而非所有候选常驻字典，网络最多两请求，AI调用不并行。HTTP404单仓库不代表全部来源失效。
+5. `POST /api/software-update/cancel`仅空对象、会话/Origin验证；返回202表示已请求。`cancellable`由状态提供：downloading先设取消事件，退出写文件后删除目标；ready/error可安全清理，仅当前自动包和.part，拒绝符号链接或路径逃逸，失败说明原因。checking/installing拒绝，原数据库和备份不动。
+6. 下载重试归零；真正启动安装器后设置installing，网页轮询接收后停止旧服务交互。100%加Failed to fetch只说明连接中断，不作为安装器已启动证明；保留后续查询和失败处理。没有增加强制安装或绕过Windows安全提示。

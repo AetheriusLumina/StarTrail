@@ -405,7 +405,7 @@ class BrowserServer:
             return
         if path not in ("/api/refresh", "/api/keywords", "/api/preferences",
                         "/api/auto-update", "/api/translation", "/api/folders",
-                        "/api/software-update/check", "/api/software-update/install") and not path.startswith(
+                        "/api/software-update/check", "/api/software-update/install", "/api/software-update/cancel") and not path.startswith(
                 ("/api/ai/", "/api/following/", "/api/keywords/", "/api/github/", "/api/readme/", "/api/folders/", "/api/translation/", "/api/search/")):
             self._send(handler, 404, {"error": "not_found"})
             return
@@ -889,6 +889,14 @@ class BrowserServer:
         if path.endswith('/check'):
             if payload:self._send(handler,400,{'error':'请求内容无效'});return
             self._send(handler,202,self.software_updater.check(force=True));return
+        if path.endswith('/cancel'):
+            if payload:self._send(handler,400,{'error':'取消更新不接受文件路径或其他参数'});return
+            with self._lock:
+                if self._quitting:
+                    self._send(handler,409,{'error':'安装程序已经打开，请在安装窗口中取消；不会删除使用中的安装包'});return
+                try:state=self.software_updater.cancel()
+                except ValueError as exc:self._send(handler,409,{'error':str(exc)});return
+            self._send(handler,202 if state['status']=='cancelling' else 200,state);return
         if payload != {'confirmed':True} or type(payload.get('confirmed')) is not bool:
             self._send(handler,400,{'error':'请确认更新将退出软件，并由安装程序备份和保留原数据'});return
         with self._lock:
@@ -903,14 +911,22 @@ class BrowserServer:
         # A launch failure keeps the running reader and its data available.
         with self._lock:
             if self._quitting:raise ValueError('软件正在退出，请下次重新更新')
+            if getattr(self.software_updater,'cancel_requested',False):raise ValueError('软件更新已取消')
             launch_installer(target,release,self.store.data_dir)
+            self.software_updater._set(status='installing',message='安装程序已经打开，请查看任务栏中的安装窗口；完成安装后重新打开 StarTrail')
             self._quitting=True
             workers=(self._worker,self._ai_worker_thread,self._readme_worker)
         self.ai_service.cancel()
         if getattr(self.service,'search_jobs',None) is not None:self.service.search_jobs.cancel()
         self.project_pretranslator.close()
         self.translation_service.close()
-        threading.Thread(target=self._finish_quit,args=workers,daemon=True).start()
+        threading.Thread(target=self._finish_software_quit,args=workers,daemon=True).start()
+
+    def _finish_software_quit(self,*workers):
+        # Let the 1.5-second frontend poll receive confirmed launcher success.
+        # The installer still waits for the existing maintenance lock to exit.
+        threading.Event().wait(2.5)
+        self._finish_quit(*workers)
 
     def _finish_quit(self, worker: threading.Thread | None,
                      ai_worker: threading.Thread | None,
@@ -1119,7 +1135,7 @@ class BrowserServer:
             keyword_groups.append({
                 "keyword_id": rule.id, "term": rule.term,
                 "cards": keyword_cards.get(rule.id, []),
-                "checked_count": current_search.newly_checked+current_search.cache_hits if current_search else progress.checked_count,
+                "checked_count": current_search.checked_completed+current_search.cache_hits if current_search else progress.checked_count,
                 "search_progress": asdict(current_search) if current_search else None,
                 "ai_status": group_job["status"] if group_job else
                              "checked" if progress.checked_count else "idle",
