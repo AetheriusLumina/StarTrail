@@ -5,7 +5,7 @@
 ## 1. 当前状态与交付门槛
 
 1. Python标准库后端、原生网页、SQLite、默认浏览器，Windows x64优先；旧包名、EXE、AppId和数据标识保持兼容。
-2. 当前代码正在准备 v0.5.0-preview.5；已发布资产仍为preview.4，不能把本地改动当作公开交付。合并检索、整组判断、低并发共享缓存、失败清理和网页交接已实现；最终验证与发布证据见开发日志。
+2. 当前交付v0.5.0-preview.5已发布，实际云包下载与摘要核验通过。合并检索、整组判断、低并发共享缓存、失败清理和网页交接已实现；609项完整回归、冻结直接运行、云端测试及构建通过，证据见开发日志。
 3. 正式安装及UserData未用于测试。本轮零真实AI调用，不运行安装器；隔离网络/AI模拟与直接冻结运行单独记录，不能当作真实大候选模型验收。
 4. 验收范围、源码标签、实际云包SHA、构建与检查结果统一写开发日志；第二台干净Windows、真实睡眠跨夜和大候选真实AI仍未验证。
 
@@ -85,7 +85,7 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 3. `POST /api/following/{id}/folders` 拖动请求为 `{"action":"move","source":"1","target":"2"}`；未分类用字符串 `unfiled`，数字文件夹 ID 也使用字符串。全部关注 `all` 不是合法来源/目标。来源归属已变化400，目标不存在404，成功返回最终 `ids`。旧的 `{"ids":[1]}` 设置分类和 `move_unfiled` 请求仍兼容。
 4. `GET /api/issue` 的 search_progress 含 job_id/section/keyword_id/local_date、status/stage、collected/unique/candidate_pool/cache_hits/newly_checked/checked_completed/pending 和 expansion_calls/search_calls/judgment_calls/catalog_calls、limited/notes。展示本日状态，不把旧任务计数变成今日进度；不因轮询重复生成卡片动画。
 5. `GET /api/search/settings` 返回 `{"enabled":true}`，缺省开启。POST 同路径严格接受布尔 `enabled`，短事务保存；关闭成功后取消当前 AI 检索。GET `/api/search/status` 返回本日 `jobs` 数组；POST `/api/search/cancel` 仅接受空对象，202 表示正在停止，不等于任务已退出。未知搜索路径404。自动关闭时数据刷新使用公共路径；显式手动继续仍可使用，模块之间停止返回部分完成及未执行说明。设置读取/保存以页面代次隔离，迟到 GET 不覆盖刚保存的额度选择。
-6. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready/cancelling/installing，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；installable 标明是否冻结安装版，downloaded/total 用于进度。
+6. 安装下载确认只接受 `{"confirmed":true}`；服务端没有任意 installer URL、安装目录或外部命令参数。software_update 状态 idle/checking/available/up_to_date/error/downloading/ready/cancelling/cancelled/installing，release 包含 tag/url/notes/installer_url/sha256/size/prerelease；installable 标明是否冻结安装版，downloaded/total 用于进度。
 
 ## 5. 存储、失效和并发
 
@@ -123,3 +123,5 @@ API 仅限本次回环实例。GET 需要 X-Radar-Token；POST 同时验证 Orig
 4. `SearchRequestCache`仅共享本次刷新公开元数据和Star历史，下一次清除；官方搜索页可直接补充已解析的元数据。SQLite存储而非所有候选常驻字典，网络最多两请求，AI调用不并行。HTTP404单仓库不代表全部来源失效。
 5. `POST /api/software-update/cancel`仅空对象、会话/Origin验证；返回202表示已请求。`cancellable`由状态提供：downloading先设取消事件，退出写文件后删除目标；ready/error可安全清理，仅当前自动包和.part，拒绝符号链接或路径逃逸，失败说明原因。checking/installing拒绝，原数据库和备份不动。
 6. 下载重试归零；真正启动安装器后设置installing，网页轮询接收后停止旧服务交互。100%加Failed to fetch只说明连接中断，不作为安装器已启动证明；保留后续查询和失败处理。没有增加强制安装或绕过Windows安全提示。
+
+整组分析计数说明：newly_checked 与 checked_completed 是新增候选的提交/成功判断累计数，不是Token量。若出现新增或语义失效资料，统一分析输入仍包含当时全部资格候选（也包含有缓存的条目）；cache_hits表示准备阶段命中，并不保证这些条目在整组调用中不重复占输入。没有待新增判断时直接复用，不调用模型。
