@@ -105,10 +105,10 @@ class SchedulerTests(unittest.TestCase):
                              "09:00", "S-1-5-21-123", date(2026, 9, 28))
         root = ET.fromstring(xml)
         ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
-        self.assertEqual(len(root.findall("t:Triggers/t:CalendarTrigger", ns)), 3)
+        self.assertEqual(len(root.findall("t:Triggers/t:CalendarTrigger", ns)), 1)
         boundaries = [item.text for item in root.findall(
             "t:Triggers/t:CalendarTrigger/t:StartBoundary", ns)]
-        self.assertEqual([value[11:16] for value in boundaries], ["09:00", "10:00", "11:00"])
+        self.assertEqual([value[11:16] for value in boundaries], ["09:00"])
         self.assertEqual(root.findtext("t:Settings/t:StartWhenAvailable", namespaces=ns), "true")
         self.assertEqual(root.findtext("t:Settings/t:WakeToRun", namespaces=ns), "false")
         self.assertEqual(root.findtext("t:Principals/t:Principal/t:LogonType", namespaces=ns),

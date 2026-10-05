@@ -32,5 +32,15 @@ let state={status:'available',current:'v0.5.0-preview.1',installable:true,releas
  update.render({status:'error',current:state.current,message:'Network unavailable'});
  assert.equal(byId('settings-software-status').textContent,'Network unavailable');
  assert.equal(byId('settings-software-check').disabled,false);
+ const failure={attempted_at:'2026-10-05T13:00:00Z',reason:'GitHub request quota exhausted <script>literal</script>'};
+ update.notifyFailure(failure);
+ assert.equal(byId('software-update-toast').hidden,false);
+ assert.ok(byId('software-update-toast-text').textContent.includes(failure.reason));
+ assert.ok([...timers.values()].some(t=>t.ms===10000));
+ byId('software-update-toast-close').listeners.click();
+ update.notifyFailure(failure);assert.equal(byId('software-update-toast').hidden,true,'polling must not repeat a failed attempt');
+ update.notifyFailure({...failure,attempted_at:'2026-10-05T14:00:00Z'});assert.equal(byId('software-update-toast').hidden,false);
+ const failureExpiry=[...timers.values()].find(t=>t.ms===10000);failureExpiry.f();assert.equal(byId('software-update-toast').hidden,true);
+ assert.equal(byId('software-update-button').hidden,true,'data failure does not expose a software update button');
  update.close();assert.equal(timers.size,0);console.log('Software update notification and confirmation passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

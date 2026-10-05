@@ -52,11 +52,15 @@ def build_task_xml(command: Path, arguments: tuple[str, ...], working_dir: Path,
     root = ET.Element(f"{{{_NS}}}Task", {"version": "1.3"})
     element("Description", element("RegistrationInfo", root)).text = _DESCRIPTION
     triggers = element("Triggers", root)
-    for offset in range(3):
-        trigger = element("CalendarTrigger", triggers)
-        element("StartBoundary", trigger).text = (start + timedelta(hours=offset)).isoformat()
-        element("Enabled", trigger).text = "true"
-        element("DaysInterval", element("ScheduleByDay", trigger)).text = "1"
+    trigger = element("CalendarTrigger", triggers)
+    repetition = element("Repetition", trigger)
+    element("Interval", repetition).text = "PT1H"
+    remaining = 24 * 60 - start.hour * 60 - start.minute
+    element("Duration", repetition).text = f"PT{remaining}M"
+    element("StopAtDurationEnd", repetition).text = "false"
+    element("StartBoundary", trigger).text = start.isoformat()
+    element("Enabled", trigger).text = "true"
+    element("DaysInterval", element("ScheduleByDay", trigger)).text = "1"
     principal = element("Principal", element("Principals", root))
     principal.set("id", "Author")
     element("UserId", principal).text = user_sid
@@ -157,6 +161,12 @@ def _belongs_to_us(state: TaskState, command: Path,
             and state.arguments == subprocess.list2cmdline(list(arguments)))
 
 
+def _duration_seconds(value):
+    # Windows normalizes PT900M to PT15H when exporting tasks.
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", value or "")
+    return sum(int(n or 0) * scale for n, scale in zip(match.groups(), (86400, 3600, 60, 1))) if match else None
+
+
 def _same_schedule(state: TaskState, working_dir: Path,
                    time: str, user_sid: str) -> bool:
     if not state.xml:
@@ -165,8 +175,7 @@ def _same_schedule(state: TaskState, working_dir: Path,
     ns = {"t": _NS}
     triggers = root.findall("t:Triggers/t:CalendarTrigger", ns)
     starts = [trigger.find("t:StartBoundary", ns) for trigger in triggers]
-    expected = [(datetime.strptime(time, "%H:%M") + timedelta(hours=n)).strftime("%H:%M")
-                for n in range(3)]
+    expected = [time]
     actual = [item.text[11:16] if item is not None and item.text else ""
               for item in starts]
     daily_and_enabled = all(
@@ -175,7 +184,13 @@ def _same_schedule(state: TaskState, working_dir: Path,
             in (None, "1")
         for trigger in triggers)
     old_dir = root.findtext("t:Actions/t:Exec/t:WorkingDirectory", namespaces=ns)
-    return (actual == expected and daily_and_enabled
+    repetition = triggers[0].find("t:Repetition", ns) if len(triggers) == 1 else None
+    expected_duration = (24 * 60 - int(time[:2]) * 60 - int(time[3:])) * 60
+    repeats = (repetition is not None
+               and _duration_seconds(repetition.findtext("t:Interval", namespaces=ns)) == 3600
+               and _duration_seconds(repetition.findtext("t:Duration", namespaces=ns)) == expected_duration
+               and repetition.findtext("t:StopAtDurationEnd", namespaces=ns) in (None, "false"))
+    return (actual == expected and daily_and_enabled and repeats
             and root.findtext("t:Settings/t:Enabled", namespaces=ns) in (None, "true")
             and root.findtext("t:Principals/t:Principal/t:LogonType", namespaces=ns)
                 == "InteractiveToken"

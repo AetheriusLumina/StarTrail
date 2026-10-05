@@ -31,11 +31,11 @@ def valid_update_time(value: str) -> bool:
 
 
 def auto_update_due(now: datetime, settings: AutoUpdateSettings,
-                    state: AutoAttemptState, latest_success_date: str | None) -> bool:
+                    state: AutoAttemptState, latest_success_date: str | None, *, incomplete: bool = False) -> bool:
     """Decide whether a local-day automatic attempt may start now."""
     if (not settings.enabled or not valid_update_time(settings.time)
-            or latest_success_date == now.date().isoformat()
-            or state.attempts >= 3 or state.status == "success"
+            or (not incomplete and latest_success_date == now.date().isoformat())
+            or state.attempts >= 3 or (not incomplete and state.status == "success")
             or now.strftime("%H:%M") < settings.time):
         return False
     if state.last_attempt_at is None:
@@ -44,8 +44,15 @@ def auto_update_due(now: datetime, settings: AutoUpdateSettings,
     return now - previous >= timedelta(hours=1)
 
 
+def refresh_failure_reason(result) -> str:
+    """Keep the first actionable evidence with a bounded user-visible reason."""
+    message = result.message or "GitHub 更新失败"
+    notes = [note for note in getattr(result, "notes", ()) if note and note not in message]
+    return (message + ("；" + "；".join(notes[:3]) if notes else ""))[:900]
+
+
 def run_scheduled_update(store, service, now: datetime) -> str:
-    """Run one eligible current-day GitHub refresh without starting a browser or AI."""
+    """Run one eligible current-day refresh under the saved automatic AI setting."""
     if now.tzinfo is None:
         raise ValueError("自动更新时间必须包含时区")
     day = now.date().isoformat()
@@ -54,7 +61,8 @@ def run_scheduled_update(store, service, now: datetime) -> str:
         with update_lock(store.data_dir):
             settings = store.load_auto_update_settings()
             state = store.auto_attempts(day)
-            if not auto_update_due(now, settings, state, store.latest_successful_date()):
+            if not auto_update_due(now, settings, state, store.latest_successful_date(),
+                                   incomplete=store.has_incomplete_search(day)):
                 return "skipped"
             if not store.begin_auto_attempt(day, observed_at):
                 return "skipped"
@@ -63,7 +71,7 @@ def run_scheduled_update(store, service, now: datetime) -> str:
             if result.status == "ok":
                 store.finish_auto_attempt(day, "success")
                 return "success"
-            reason = result.message or "GitHub 更新失败"
+            reason = refresh_failure_reason(result)
             store.save_refresh_failure(observed_at, reason)
         except Exception as exc:
             reason = f"更新失败：{exc}"

@@ -5,7 +5,7 @@ import math
 import sqlite3
 from contextlib import closing, nullcontext
 from dataclasses import asdict, replace
-from datetime import datetime,timedelta,timezone
+from datetime import date, datetime,timedelta,timezone
 from pathlib import Path
 
 from .ai_types import (AIProgress, CandidateBatch, InsightText, ProjectExplanation,
@@ -861,6 +861,44 @@ class RadarStore:
         with closing(self._connect()) as connection, connection:
             connection.execute("INSERT INTO settings VALUES ('search_ai_enabled',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(int(enabled)),))
 
+    def mark_search_incomplete(self, local_date: str, incomplete: bool, *, lease=None, now=None) -> bool:
+        """Record whole-refresh completion only while the publishing run owns it."""
+        date.fromisoformat(local_date)
+        now = datetime.now().timestamp() if now is None else now
+        token = json.dumps([lease.job_id, lease.generation, lease.owner]) if lease else None
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            def active(job_id, generation, owner):
+                row = connection.execute("SELECT generation,owner,expires_at FROM search_runs WHERE job_id=?", (job_id,)).fetchone()
+                return bool(row and row['generation'] == generation and row['owner'] == owner and row['expires_at'] > now)
+            owner = connection.execute("SELECT value FROM settings WHERE name='search_incomplete_owner'").fetchone()
+            old_token = owner['value'] if owner else None
+            if lease and not active(lease.job_id, lease.generation, lease.owner):
+                return False
+            if old_token and old_token != token:
+                if active(*json.loads(old_token)):
+                    return False
+                if lease and not incomplete:
+                    return False
+            if incomplete:
+                connection.execute("INSERT INTO settings VALUES ('search_incomplete_date', ?) "
+                                   "ON CONFLICT(name) DO UPDATE SET value=excluded.value", (local_date,))
+                if token:
+                    connection.execute("INSERT INTO settings VALUES ('search_incomplete_owner', ?) "
+                                       "ON CONFLICT(name) DO UPDATE SET value=excluded.value", (token,))
+                else:
+                    connection.execute("DELETE FROM settings WHERE name='search_incomplete_owner'")
+            else:
+                changed = connection.execute("DELETE FROM settings WHERE name='search_incomplete_date' AND value=?", (local_date,))
+                if changed.rowcount:
+                    connection.execute("DELETE FROM settings WHERE name='search_incomplete_owner'")
+            return True
+
+    def has_incomplete_search(self, local_date: str) -> bool:
+        with closing(self._connect()) as connection:
+            return connection.execute("SELECT 1 FROM settings WHERE name='search_incomplete_date' AND value=?",
+                                      (local_date,)).fetchone() is not None
+
     def load_auto_update_settings(self) -> AutoUpdateSettings:
         with closing(self._connect()) as connection:
             rows = connection.execute(
@@ -929,9 +967,9 @@ class RadarStore:
             raise ValueError("自动更新日期无效")
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute(
-                "SELECT 1 FROM daily_runs WHERE local_date=?", (local_date,)
-            ).fetchone():
+            complete = connection.execute("SELECT 1 FROM daily_runs WHERE local_date=?", (local_date,)).fetchone()
+            unfinished = connection.execute("SELECT 1 FROM settings WHERE name='search_incomplete_date' AND value=?", (local_date,)).fetchone()
+            if complete and not unfinished:
                 return False
             row = connection.execute(
                 "SELECT attempts, last_attempt_at FROM auto_update_runs WHERE local_date=?",

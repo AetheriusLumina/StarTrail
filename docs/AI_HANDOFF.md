@@ -5,10 +5,19 @@
 ## 1. 当前状态与交付门槛
 
 1. 星迹 · StarTrail 采用 Python 标准库后端、原生网页、SQLite 和默认浏览器，Windows x64 优先。内部包名、EXE、AppId、任务和数据标识继续兼容 GitHub Radar。
-2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。
+2. 自动多来源检索、AI 扩词及主动联网搜索、持久化判断、归类/拖动、项目类型首行高亮、软件更新检测/验证/安装器备份已接入源码。中英文 README 分开，英文功能图使用英文实机图。检索故障修复源码已接入；下一交付 v0.5.0-preview.4 待构建发布。
 3. 运行版本 0.5.0，当前交付标签 v0.5.0-preview.3。同标签源码的本机构建已隔离覆盖升级验收；手动Windows流程测试/构建/校验/发布完成，最终交付采用实际公开下载并验证的云端安装包。云包未安装到正式软件，构建摘要和验收范围分别记录于开发日志。
-4. 完整回归在统一日志记录；本次最终回归为 562 项，隔离检查通过，包含 Node 更新交互。独立复核发现的九类边界问题均补回归修复；额外补扩词失败公共路径。真实 AI 三次验收通过，观察到五次实际搜索事件。新冻结资源一致、双向离线翻译、本机 API 和退出通过；隔离中文路径真实安装、覆盖升级、完整备份、数据保留、快捷方式 ICO、备份拒绝停止覆盖通过。
-5. 正式用户数据未用于开发测试；真实 AI 验证严格三次，未执行自动二百候选验收。安装验收仅更换测试 AppId/注册键/快捷方式名，程序和备份逻辑未变，避免覆盖真实安装；第二台干净 Windows 和跨夜长期运行仍未验收。
+4. 完整回归在统一日志记录；本次故障修复回归为 576 项（67.519秒），隔离检查通过，包含 Node 更新交互。独立复核发现的九类边界问题均补回归修复；额外补扩词失败公共路径。真实 AI 三次验收通过，观察到五次实际搜索事件。新冻结资源一致、双向离线翻译、本机 API 和退出通过；隔离中文路径真实安装、覆盖升级、完整备份、数据保留、快捷方式 ICO、备份拒绝停止覆盖通过。
+5. 本轮仅直接运行构建产物验收双语离线翻译/资源/失败API/退出，并实测无害Windows任务注册导出；本轮安装在位置保护处终止，按要求不再执行安装。此前的覆盖安装验收属于旧标签，不能充作本轮验收。正式用户数据未用于开发测试；真实 AI 验证严格三次，未执行自动二百候选验收。安装验收仅更换测试 AppId/注册键/快捷方式名，程序和备份逻辑未变，避免覆盖真实安装；第二台干净 Windows 和跨夜长期运行仍未验收。
+
+### 更新恢复、状态与通知契约
+
+1. SearchSources 读取 RadarStore.recent_growth_repositories(local_date, limit=200)，不得使用不存在的 latest_growth_repositories。SearchCoordinator 在创建 RequestBudget 前调用真实 GitHubClient.renew_expired_quotas；只能重新探测已过服务器重置时刻的额度。
+2. settings.search_incomplete_date 和 search_incomplete_owner 保存整次更新状态及 JSON [job_id, generation, owner]。mark_search_incomplete 在 BEGIN IMMEDIATE 中验证活动租约和现有所有权；整次成功须在释放 refresh 租约前结束标记。任何单模块 daily_runs 记录都不能替代整体完成。
+3. auto_update_due 的 incomplete 参数只绕过“当天已有结果/曾成功”门禁，仍守住三个尝试与一小时间隔；begin_auto_attempt 在同一事务核对未完成标记。暂停/取消模块导致整体 partial，不伪报 ok；正常预算覆盖有限但已发布模块仍维持 partial 模块语义。
+4. Windows 任务为一个每日 CalendarTrigger，Repetition PT1H 至本机当日末；StartWhenAvailable=true、WakeToRun=false。导出 XML 时长可能为 PT900M/PT15H/P1D，比较时按秒规范化，老三触发任务由正常 sync 迁移。BrowserServer 每60秒执行同一到期门禁，关闭时停止检查线程。
+5. GET /api/issue 新增 update_failure: null 或 {attempted_at, reason}；原因来自持久化刷新失败，可追加只读账号状态中的重连提示，不触发新授权。前端复用现有十秒 toast，按尝试时间在 sessionStorage 去重，使用 textContent；不会因此显示软件更新按钮。GET /api/auto-update 新增 incomplete，设置可标记“最近保存（部分结果）”。
+6. 手动与自动错误都持久保存原因。侧栏显示当前阶段和数量；查看这些状态或提醒不启动新搜索、不修改 AI 用量。开发测试使用合成网络响应/隔离数据，不能把这些说成真实全量爬取或电脑睡眠验收。
 
 ## 2. 模块与运行链路
 

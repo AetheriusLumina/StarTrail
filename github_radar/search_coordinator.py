@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from .ai_types import AIRepositoryInput
 from .search_types import PreparedCandidate
-from .github_client import GitHubRequestError
+from .github_client import GitHubRequestError, GitHubClient
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -98,6 +98,10 @@ class SearchCoordinator:
         def timeout():return max(.01,min(120,deadline-self.clock()))
         try:
             tick()
+            # A long-lived page may retain yesterday's exhausted quota.
+            # Refresh only expired server resets before constructing the budget.
+            if isinstance(self.client, GitHubClient):
+                self.client.renew_expired_quotas(now=self.now().timestamp())
             budget=RequestBudget(getattr(self.client,'core_remaining',None),getattr(self.client,'search_remaining',None),min(deadline,started+600))
             expansion=None
             if scope.section=='keyword':

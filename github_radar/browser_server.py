@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 from .ai_provider import AIOutputError, CodexProvider
 from .ai_service import AIService
 from .codex_connection import CodexConnection
-from .daily_update import auto_update_due, run_scheduled_update, valid_update_time
+from .daily_update import auto_update_due, run_scheduled_update, valid_update_time, refresh_failure_reason
 from .diagnostic_log import record_error
 from .github_client import GitHubRequestError
 from .i18n import tr
@@ -42,6 +42,8 @@ _ASSETS = Path(__file__).resolve().parent / "web_assets"
 
 class BrowserServer:
     """One session; callers launch the loopback listener and own its lifetime."""
+
+    AUTO_UPDATE_POLL_SECONDS = 60
 
     def __init__(self, service: RadarService, store: RadarStore,
                  ai_service: AIService | None = None,
@@ -81,6 +83,8 @@ class BrowserServer:
         self._last_result: RefreshResult | None = None
         self._stopped = threading.Event()
         self._closed = False
+        self._schedule_stop = threading.Event()
+        self._schedule_thread = None
         server_owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -109,20 +113,33 @@ class BrowserServer:
             self._thread.start()
             self._pretranslate_latest()
             if self._check_software_on_start:self.software_updater.check()
+            self._schedule_thread = threading.Thread(target=self._check_due_updates,
+                                                       daemon=True)
+            self._schedule_thread.start()
+
+    def _check_due_updates(self):
+        # The process is suspended during sleep. On resume the next check uses
+        # local wall time and the durable daily attempt policy, never a new budget.
+        while not self._schedule_stop.wait(self.AUTO_UPDATE_POLL_SECONDS):
+            try:
+                self.start_due_update()
+            except (OSError, sqlite3.Error, ValueError):
+                record_error(self.store.data_dir, "auto-update", "恢复后检查每日更新失败，等待下一次检查")
 
     def start_due_update(self, now: datetime | None = None) -> bool:
         """Catch up today's due update on startup without blocking page display."""
         now = now or datetime.now().astimezone()
         day = now.date().isoformat()
         with self._lock:
-            if (self._quitting or (self._worker is not None and self._worker.is_alive())
+            if (self._closed or self._quitting or (self._worker is not None and self._worker.is_alive())
                     or (self._readme_worker is not None and self._readme_worker.is_alive())
                     or (self._ai_worker_thread is not None
                         and self._ai_worker_thread.is_alive())):
                 return False
             if not auto_update_due(now, self.store.load_auto_update_settings(),
                                    self.store.auto_attempts(day),
-                                   self.store.latest_successful_date()):
+                                   self.store.latest_successful_date(),
+                                   incomplete=self.store.has_incomplete_search(day)):
                 return False
             self._last_result = None
             self._worker = threading.Thread(target=self._scheduled_worker,
@@ -141,6 +158,8 @@ class BrowserServer:
         if self._closed:
             return
         self._closed = True
+        self._schedule_stop.set()
+        if self._schedule_thread is not None:self._schedule_thread.join(timeout=3)
         self.software_updater.close()
         if getattr(self.service, "search_jobs", None) is not None:self.service.search_jobs.cancel()
         self.readme_service.cancel()
@@ -374,7 +393,8 @@ class BrowserServer:
                     return
                 if not auto_update_due(now, self.store.load_auto_update_settings(),
                                        self.store.auto_attempts(day),
-                                       self.store.latest_successful_date()):
+                                       self.store.latest_successful_date(),
+                                   incomplete=self.store.has_incomplete_search(day)):
                     self._send(handler, 200, {"status": "skipped"})
                     return
                 self._last_result = None
@@ -643,6 +663,7 @@ class BrowserServer:
         return {
             "enabled": settings.enabled, "time": settings.time,
             "registered": registered, "task_error": error,
+            "incomplete": self.store.has_incomplete_search(date.today().isoformat()),
             "last_success_date": last_success_date,
             "last_success_at": (self.store.daily_updated_at(last_success_date)
                                 if last_success_date else None),
@@ -833,8 +854,13 @@ class BrowserServer:
             result = self.service.load_latest(today)
         with self._lock:
             self._last_result = result
-        if result.status=='error':record_error(self.store.data_dir,'manual-update',result.message+'; '+'; '.join(result.notes))
-        if result.status == 'ok': self._pretranslate_latest()
+        if result.status in ('error', 'partial'):
+            reason = refresh_failure_reason(result)
+            self.store.save_refresh_failure(observed_at, reason)
+            record_error(self.store.data_dir, 'manual-update', reason)
+        if result.status == 'ok':
+            self._pretranslate_latest()
+        elif result.status == 'partial':self._pretranslate_latest()
 
     def _pretranslate_latest(self):
         try:
@@ -1025,6 +1051,12 @@ class BrowserServer:
         return {'cards':cards,'folders':list(folders.values()),'folder':folder,
                 'all_count':len(self.store.followed_repositories()),'unfiled_count':len(self.store.followed_repositories('unfiled'))}
 
+    def _failure_with_account(self, reason):
+        status = self.github_account.status()
+        if status.state in ('reconnect', 'error') and status.reason and status.reason not in reason:
+            return reason + '；' + status.reason
+        return reason
+
     def _issue_payload(self) -> dict:
         language = self.store.load_preferences()[0]
         with self._lock:
@@ -1107,6 +1139,8 @@ class BrowserServer:
             "sections": sections,
             "keyword_groups": keyword_groups,
             "search_progress": [asdict(p) for p in search_progress],
+            "update_failure": ({"attempted_at": failure[0], "reason": tr(language, self._failure_with_account(failure[1]))}
+                               if failure else None),
             "search_enabled": self.store.load_search_enabled(),
             "ai_busy": ai_state is not None and ai_state["status"] == "running",
         }

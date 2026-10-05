@@ -257,7 +257,7 @@
       </section>
       <section class="settings-section auto-update-section" aria-labelledby="auto-update-title">
         <h2 id="auto-update-title" data-i18n="每日更新">每日更新</h2>
-        <p class="section-description" data-i18n="电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；自动 AI 发现由下方开关控制。">电脑开着且你已登录 Windows 时，StarTrail 会在设定时间更新 GitHub 数据；自动 AI 发现由下方开关控制。</p>
+        <p class="section-description" data-i18n="电脑清醒且已登录 Windows 时按设定时间更新；睡眠期间不联网，恢复后补更。自动 AI 发现由下方开关控制。">电脑清醒且已登录 Windows 时按设定时间更新；睡眠期间不联网，恢复后补更。自动 AI 发现由下方开关控制。</p>
         <label class="auto-update-switch" for="search-ai-enabled"><input id="search-ai-enabled" type="checkbox"><span data-i18n="自动 AI 发现">自动 AI 发现</span></label>
         <p class="field-hint" data-i18n="开启后，数据更新自动扩词、联网搜索和分批核实，使用 Codex 账号额度；关闭后使用公共检索，手动 AI 操作仍可使用。">开启后，数据更新自动扩词、联网搜索和分批核实，使用 Codex 账号额度；关闭后使用公共检索，手动 AI 操作仍可使用。</p>
         <p id="search-ai-feedback" class="form-feedback" role="status" aria-live="polite"></p>
@@ -269,7 +269,7 @@
           <div class="auto-update-time-field">
             <label for="auto-update-time" data-i18n="每天运行时间">每天运行时间</label>
             <input id="auto-update-time" type="time" min="00:00" max="21:59" step="60" aria-describedby="auto-update-time-help auto-update-time-error">
-            <span id="auto-update-time-help" class="field-hint" data-i18n="本地时间，失败后每隔一小时最多再试两次。">本地时间，失败后每隔一小时最多再试两次。</span>
+            <span id="auto-update-time-help" class="field-hint" data-i18n="本地时间；恢复后检查补更，失败至少隔一小时再试，每天最多三次。">本地时间；恢复后检查补更，失败至少隔一小时再试，每天最多三次。</span>
             <span id="auto-update-time-error" class="field-error" role="alert"></span>
           </div>
           <button id="auto-update-save" class="button button-primary" type="submit" data-i18n="保存每日更新">保存每日更新</button>

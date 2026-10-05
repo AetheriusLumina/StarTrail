@@ -621,6 +621,7 @@ async function startRefine(keywordId) {
 
 function renderIssue(issue) {
   latestIssue = issue;
+  if(!issue.busy&&issue.update_failure)softwareUpdates?.notifyFailure({...issue.update_failure,reason:localizeServerText(issue.update_failure.reason)});
   const growth = issue.sections.find((section) => section.id === "growth") || { cards: [] };
   const keyword = issue.sections.find((section) => section.id === "keyword") || { cards: [] };
   const busy = Boolean(issue.busy || issue.ai_busy);
@@ -662,6 +663,7 @@ function renderIssue(issue) {
   const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').map(p=>
     language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · collected ${p.collected}, checked ${p.newly_checked}, cache ${p.cache_hits}, pending ${p.pending}`:
     `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 收集 ${p.collected}，新核实 ${p.newly_checked}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
+  if(issue.busy&&progress.length)setStatus(progress.join(" · "), "busy");
   byId("issue-notes").textContent = [...new Set([...progress,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
   if (pollTimer) clearTimeout(pollTimer);
   if (busy && !quitting) pollTimer = setTimeout(loadIssue, 1200);
@@ -679,6 +681,7 @@ async function loadIssue() {
     }
   } catch (error) {
     setStatus(error.message, "error");
+    softwareUpdates?.notifyFailure({attempted_at:"connection:"+error.message,reason:localizeServerText(error.message)});
     byId("refresh-button").disabled = !token;
     if(!quitting){if(pollTimer)clearTimeout(pollTimer);pollTimer=setTimeout(loadIssue,1200);}
   }
@@ -699,6 +702,7 @@ async function startRefresh() {
     await loadIssue();
   } catch (error) {
     setStatus(error.message, "error");
+    softwareUpdates?.notifyFailure({attempted_at:String(Date.now()),reason:localizeServerText(error.message)});
     byId("refresh-button").disabled = false;
   }
 }
@@ -944,7 +948,7 @@ function renderAutoUpdate(state, updateControls = true) {
       ? tr(state.registered ? "定时任务已启用" : "定时任务尚未启用，手动更新仍可使用")
       : tr("每日更新已暂停");
   byId("auto-update-last-success").textContent = state.last_success_at
-    ? `${tr("上次成功")}${language === "en" ? ": " : "："}${state.last_success_at.replace("T", " ")}`
+    ? `${tr(state.incomplete?"最近保存（部分结果）":"上次成功")}${language === "en" ? ": " : "："}${state.last_success_at.replace("T", " ")}`
     : tr("还没有成功更新记录");
   const attempt = state.last_attempt || {};
   byId("auto-update-last-attempt").textContent = attempt.last_attempt_at

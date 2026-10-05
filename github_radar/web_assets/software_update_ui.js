@@ -3,6 +3,19 @@ window.RadarSoftwareUpdate={create({byId,api,post,tr,reveal=()=>{},remember}) {
   let state={},poll=null,expiry=null,stopped=false,generation=0;
   const seen=new Set();
   function dismiss(){if(expiry!==null)clearTimeout(expiry);expiry=null;byId('software-update-toast').hidden=true;}
+  function showNotice(text){
+    dismiss();byId('software-update-toast-text').textContent=text;
+    byId('software-update-toast').hidden=false;reveal(byId('software-update-toast'));
+    expiry=setTimeout(dismiss,10000);
+  }
+  function notifyFailure(failure){
+    if(stopped||!failure?.attempted_at||!failure.reason)return;
+    const key='startrail-data-failure:'+failure.attempted_at;
+    let remembered=false;try{remembered=Boolean(remember?.getItem(key));}catch{}
+    if(seen.has(key)||remembered)return;
+    seen.add(key);try{remember?.setItem(key,'1');}catch{}
+    showNotice(tr('数据更新未完成')+'：'+tr(failure.reason));
+  }
   function render(next){
     state=next||{};const release=state.release;
     const pending=['downloading','ready'].includes(state.status);
@@ -23,9 +36,7 @@ window.RadarSoftwareUpdate={create({byId,api,post,tr,reveal=()=>{},remember}) {
     let remembered=false;try{remembered=Boolean(key&&remember?.getItem(key));}catch{}
     if(release&&state.status==='available'&&!seen.has(release.tag)&&!remembered){
       seen.add(release.tag);try{remember?.setItem(key,'1');}catch{}
-      dismiss();byId('software-update-toast-text').textContent=tr('发现新软件版本')+' '+release.tag+'。'+tr('可从左侧“软件更新”升级，保留原数据。');
-      byId('software-update-toast').hidden=false;reveal(byId('software-update-toast'));
-      expiry=setTimeout(dismiss,10000);
+      showNotice(tr('发现新软件版本')+' '+release.tag+'。'+tr('可从左侧“软件更新”升级，保留原数据。'));
     }
   }
   async function load(){
@@ -57,5 +68,5 @@ window.RadarSoftwareUpdate={create({byId,api,post,tr,reveal=()=>{},remember}) {
     try{render(await post('/api/software-update/install',{confirmed:true}));if(poll!==null)clearTimeout(poll);if(!stopped)poll=setTimeout(load,1500);}
     catch(error){byId('software-update-message').textContent=error.message;byId('software-update-install').disabled=!state.installable;}
   });
-  return {render,start:load,close(){stopped=true;if(poll!==null)clearTimeout(poll);poll=null;dismiss();}};
+  return {render,notifyFailure,start:load,close(){stopped=true;if(poll!==null)clearTimeout(poll);poll=null;dismiss();}};
 }};

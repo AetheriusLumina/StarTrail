@@ -76,7 +76,7 @@ These are actual usage screenshots. Projects, dates, rankings, and figures refle
 6. Verify substantive relevance before sorting by official total Stars. Apply the minimum-Star threshold and archive filter, exclude previously displayed projects and other modules' occupied slots, and keep merely collected candidates eligible for later discovery.
 7. Refresh facts daily while reusing unchanged semantic judgments from disk. Check at most twenty repositories per batch and two hundred new judgments per module per day by default. Repeated updates do not reset usage. Manual continuation can add up to two hundred judgments.
 8. When new results are insufficient, allow at most one additional AI gap search within the task budget, then merge and rerank. Rate limits, incomplete pages, failures, and insufficient candidates remain visible; exhaustive coverage of all relevant GitHub repositories is not promised.
-9. Switching saved pages does not run discovery. Update now is independent of the scheduled time, and duplicate clicks reuse the running update.
+9. Switching saved pages does not run discovery. Update now is independent of the scheduled time, and duplicate clicks reuse the running update. The sidebar shows the current stage and counts. Sleep pauses network work, and due updates are checked after resume. A failure notice explains the reason, dismisses after ten seconds or on request, and remains available in Settings.
 
 </details>
 

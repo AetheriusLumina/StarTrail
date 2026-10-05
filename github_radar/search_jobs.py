@@ -54,12 +54,17 @@ class SearchJobs:
                 if not self.store.load_search_enabled() or not search.renew_run(lease,now=self.now().timestamp(),ttl=1900):self.cancel();return
         thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
         try:
+            if not self.store.mark_search_incomplete(day, True, lease=lease, now=self.now().timestamp()):
+                raise ValueError('当前更新已被其他任务替代，已保存结果保留')
             for module in scopes:
                 if self._event.is_set() or not self.store.load_search_enabled():break
                 self._active=self.factory()
                 p=self._active.run(module,cancel_event=self._event)
                 self.progress.append(p)
                 search.renew_run(lease,now=self.now().timestamp(),ttl=1900)
+            interrupted=len(self.progress)<len(scopes) or any(p.status not in ('done','partial') for p in self.progress)
+            if not self.store.mark_search_incomplete(day, interrupted, lease=lease, now=self.now().timestamp()):
+                raise ValueError('当前更新已被其他任务替代，已保存结果保留')
         finally:
             heartbeat_stop.set();thread.join(timeout=1)
             self._active=None;search.finish_run(lease)
@@ -67,8 +72,12 @@ class SearchJobs:
         partial=len(self.progress)<len(scopes) or any(p.status!='done' for p in self.progress)
         notes=tuple(dict.fromkeys(note for p in self.progress for note in p.notes))
         if len(self.progress)<len(scopes):notes+=('检索提前停止，未执行的模块尚未更新；已保存结果保留',)
-        result=self.service._result(day,self.store.daily_recommendations(day),'ok' if successful else 'error',
-            not successful,'已更新；部分检索仍待继续' if successful and partial else '更新已完成' if successful else '检索未完成，已保留上次结果',notes)
+        interrupted=len(self.progress)<len(scopes) or any(p.status not in ('done','partial') for p in self.progress)
+        failed_notes=tuple(note for p in self.progress if p.status not in ('done','partial') for note in p.notes)
+        failure_detail='；'.join((failed_notes or notes)[:3])[:500]
+        failure_message='检索未完成，已保留上次结果'+('：'+failure_detail if failure_detail else '')
+        result=self.service._result(day,self.store.daily_recommendations(day),'partial' if successful and interrupted else 'ok' if successful else 'error',
+            not successful,('部分更新未完成，已保留已保存结果：'+failure_detail) if successful and interrupted else '已更新；部分检索仍待继续' if successful and partial else '更新已完成' if successful else failure_message,notes)
         return result
 
 def install_search(service,connection=None):

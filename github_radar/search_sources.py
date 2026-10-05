@@ -106,7 +106,7 @@ class SearchSources:
                 try:candidates.extend(DiscoveryCandidate(n,None,('github_trending',),datetime.now().astimezone().isoformat()) for n in self.trending.repo_names())
                 except Exception as exc:self.notes.append('GitHub Trending: '+str(exc));self.limited=True
             if scope.section=='growth':
-                tracked=[r for r,_,_ in self.store.followed_repositories()]+self.store.latest_growth_repositories(scope.local_date,limit=200)
+                tracked=[r for r,_,_ in self.store.followed_repositories()]+self.store.recent_growth_repositories(scope.local_date,limit=200)
                 candidates.extend(DiscoveryCandidate(r.full_name,r.id,('tracked',),datetime.now().astimezone().isoformat()) for r in tracked)
                 candidates.extend(self.store.catalog_candidates(500))
                 if self.free_events and budget.can_spend('external',1,self.clock()):
@@ -128,7 +128,9 @@ class SearchSources:
                     self.store.save_discovery_batch(DiscoveryBatch('verified',
                         (replace(candidate,repo_id=observation.repo.id,full_name=observation.repo.full_name,cached_repo=observation.repo,evidence=evidence),),None,True,()))
                     continue
-                if not budget.can_spend('core',1,self.clock()):self.limited=True;break
+                if not budget.can_spend('core',1,self.clock()):
+                    self.notes.append('GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新')
+                    self.limited=True;break
                 observation=self.resolve_candidate(candidate,budget)
                 if observation:
                     resolved[key]=observation
@@ -137,7 +139,9 @@ class SearchSources:
             terms=(scope.term,*(expansion.terms if expansion else ())) if scope.section=='keyword' else ('',)
             start=date(2007,1,1) if scope.section=='keyword' else date.fromisoformat(scope.local_date)-timedelta(days=30)
             for term in dict.fromkeys(terms):
-                if cancel_event.is_set() or not budget.can_spend('search',1,self.clock()):self.limited=True;break
+                if cancel_event.is_set() or not budget.can_spend('search',1,self.clock()):
+                    if not cancel_event.is_set():self.notes.append('GitHub 搜索请求额度或时间预算不足，检索断点已保留；额度恢复后可继续更新')
+                    self.limited=True;break
                 self._search_range(scope,term,start,date.fromisoformat(scope.local_date),budget,cancel_event,on_progress)
         finally:
             if hasattr(self.client,'budget'):

@@ -3,7 +3,17 @@
 from __future__ import annotations
 
 _EN = {
-    "最多创建200个文件夹": "The limit of 200 folders has been reached",
+"最近保存（部分结果）": "Last saved (partial results)",
+    "检索未完成，已保留上次结果": "Search did not finish; previous results were kept",
+    "部分更新未完成，已保留已保存结果": "Some modules did not finish; saved results were kept",
+    "GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新": "GitHub metadata quota or time budget is insufficient. Unchecked candidates were kept; continue after the quota recovers.",
+    "GitHub 搜索请求额度或时间预算不足，检索断点已保留；额度恢复后可继续更新": "GitHub search quota or time budget is insufficient. The search cursor was kept; continue after the quota recovers.",
+    "GitHub 授权已失效，请重新登录；暂用公开请求更新。": "GitHub authorization is no longer valid. Reconnect in Settings; public requests are being used for now.",
+    "GitHub 授权续期暂未完成，将稍后重试；暂用公开请求更新。": "GitHub authorization renewal did not finish. It will retry later; public requests are being used for now.",
+    "数据更新未完成": "Data update did not finish",
+    "电脑清醒且已登录 Windows 时按设定时间更新；睡眠期间不联网，恢复后补更。自动 AI 发现由下方开关控制。": "Updates run at the scheduled time while Windows is awake and signed in; sleep pauses network work, and updates catch up after resume. Automatic AI discovery is controlled below.",
+    "本地时间；恢复后检查补更，失败至少隔一小时再试，每天最多三次。": "Local time; check for catch-up after resume, retry at least one hour apart, at most three attempts per day.",
+        "最多创建200个文件夹": "The limit of 200 folders has been reached",
     "已存在同名文件夹": "A folder with this name already exists",
     "名称或已保存内容": "Name or saved content",
     "开始日期": "From date",
@@ -151,4 +161,11 @@ _EN.update({"查看原文":"View original", "显示译文":"Show translation",
 def tr(language: str, key: str, **values: object) -> str:
     """Translate product generated copy; unknown strings are preserved verbatim."""
     template = _EN.get(key, key) if language == "en" else key
+    if language == "en" and key not in _EN:
+        if '；' in key:
+            template = '; '.join(tr(language, part) for part in key.split('；'))
+        else:
+            prefix, separator, detail = key.partition('：')
+            if separator and prefix in _EN:
+                template = _EN[prefix] + ': ' + tr(language, detail)
     return template.format(**values) if values else template

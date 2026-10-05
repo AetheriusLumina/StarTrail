@@ -69,6 +69,11 @@ class RadarService:
         if self.search_jobs is not None:
             result=self.search_jobs.refresh(local_date,observed_at)
             if result is not None:return result
+        result = self._refresh_public(local_date, observed_at)
+        if result.status == 'ok':self.store.mark_search_incomplete(local_date, False)
+        return result
+
+    def _refresh_public(self, local_date: str, observed_at: str) -> RefreshResult:
         if self.discovery is not None:
             prior_budget = getattr(self.client,"budget",None)
             prior_clock = getattr(self.client,"clock",None)
