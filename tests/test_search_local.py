@@ -12,6 +12,70 @@ from github_radar.models import OfficialStarWeek,StarDay,StarSnapshot,Recommenda
 from tests.test_storage import repository
 
 class LocalDiscoveryTests(unittest.TestCase):
+ def test_old_trend_not_promoted_by_today_metadata_refresh(self):
+  from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  search=SearchStore(self.store)
+  search.save_candidates(scope,tuple(ObservedRepository(repository(i,10000+i),self.now.isoformat()) for i in (1,2)),())
+  old=DiscoveryCandidate('org/old',1,('trendshift_daily',),(self.now-timedelta(days=10)).isoformat())
+  self.store.save_discovery_batch(DiscoveryBatch('trendshift_daily',(old,),None,True,()))
+  self.store.save_discovery_batch(DiscoveryBatch('tracked',(replace(old,source_names=('tracked',),discovered_at=self.now.isoformat()),),None,True,()))
+  self.assertEqual([r['repo_id'] for r in search.growth_frontier(scope)],[2,1])
+
+ def test_network_retry_pending_at_quota_cutoff_keeps_old_issue(self):
+  from github_radar.github_client import GitHubClient,GitHubRequestError
+  from github_radar.models import StarDay
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(2);client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=1)
+  engine.client=client;client.core_remaining=12;calls=[]
+  engine.search.save_star_day(1,StarDay("2026-10-04",99),self.now)
+  def history(name):
+   calls.append(name)
+   client.budget.spend('core',1,engine.clock())
+   raise GitHubRequestError('network failed before quota cutoff') from TimeoutError()
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+  client.star_history_weeks=history
+  p=engine.run(scope)
+  self.assertEqual(p.status,'paused',p.notes);self.assertTrue(p.failed)
+  self.assertEqual(self.store.daily_recommendations(scope.local_date),[])
+
+ def test_growth_measurement_prioritizes_today_trends_before_total_stars(self):
+  from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(4);engine.client.core_remaining=11;calls=[]
+  engine.sources.collect=lambda *args:engine.search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000+i),full_name='org/r'+str(i)),self.now.isoformat()) for i in range(1,5)),())
+  from github_radar.discovery_types import SourceEvidence
+  evidence=SourceEvidence(source_name='trendshift_daily',source_url='https://trendshift.io/',full_name='org/r1',observed_at=self.now.isoformat(),repo_id=1,period='day',stat_date=scope.stat_date,rank_kind='source',source_rank=1,total_stars_text=None,daily_added_text=None,evidence_text='trend')
+  self.store.save_discovery_batch(DiscoveryBatch('trendshift_daily',(DiscoveryCandidate('org/r1',1,('trendshift_daily',),self.now.isoformat(),evidence=(evidence,)),),None,True,()))
+  engine.client.star_history_weeks=lambda name:(calls.append(name) or [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))])
+  p=engine.run(scope)
+  self.assertEqual(p.status,'partial',p.notes)
+  self.assertEqual(calls,['org/r1'])
+
+ def test_quota_cutoff_publishes_verified_range_and_reads_remaining_cache(self):
+  from github_radar.models import StarDay
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(4);engine.client.core_remaining=11
+  calls=[]
+  engine.client.star_history_weeks=lambda name:(calls.append(name) or [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))])
+  engine.search.save_star_day(1,StarDay('2026-10-04',99),self.now)
+  engine._wait_core_steps=lambda *a:(_ for _ in ()).throw(AssertionError('must not wait for another hourly quota'))
+  p=engine.run(scope)
+  self.assertEqual(p.status,'partial',p.notes)
+  self.assertTrue(p.quota_limited);self.assertEqual(p.official_checked,2)
+  self.assertEqual(p.cache_hits,1);self.assertEqual(p.pending,2);self.assertEqual(len(calls),1)
+  self.assertEqual([r.repo_id for r in self.store.daily_recommendations(scope.local_date)],[1,4])
+
+ def test_quota_cutoff_does_not_hide_independent_official_failure(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(2);engine.client.core_remaining=11
+  def fail(name):raise GitHubRequestError('invalid official response')
+  engine.client.star_history_weeks=fail
+  p=engine.run(scope)
+  self.assertEqual(p.status,'paused');self.assertTrue(p.failed)
+  self.assertEqual(self.store.daily_recommendations(scope.local_date),[])
+
  def test_transient_network_failure_gets_one_later_wave_without_losing_prior_evidence(self):
   from github_radar.github_client import GitHubClient,GitHubRequestError
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
@@ -46,8 +110,8 @@ class LocalDiscoveryTests(unittest.TestCase):
    def is_set(_):return False
    def wait(_,seconds):self.time[0]+=seconds;self.now+=timedelta(seconds=seconds);return False
   p=engine.run(scope,cancel_event=Event())
-  self.assertEqual(p.status,'done',p.notes);self.assertEqual(len(calls),2)
-  self.assertEqual(p.official_checked,1);self.assertEqual(p.pending,0)
+  self.assertEqual(p.status,'paused',p.notes);self.assertEqual(len(calls),1)
+  self.assertTrue(p.quota_limited);self.assertEqual(p.official_checked,0);self.assertEqual(p.pending,1)
 
  def test_quota_wait_resumes_at_server_reset_and_can_be_canceled(self):
   from github_radar.github_client import GitHubClient
@@ -295,6 +359,23 @@ class AtomicIssueTests(LocalDiscoveryTests):
 
 
 class LocalJobsTests(unittest.TestCase):
+ def test_scoped_growth_and_complete_keyword_commit_together(self):
+  # Use the existing factory hook with one usable REST request, while keywords
+  # already carry fresh official search metadata and require no per-repo reads.
+  from github_radar.service import RadarService
+  from github_radar.search_jobs import SearchJobs
+  def factory():
+   e=self.engine(12);e.client.core_remaining=11
+   e.client.star_history_weeks=lambda name:[OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+   return e
+  result=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,factory,now=lambda:self.now,model=lambda:'model').refresh(self.scope.local_date,self.now.isoformat())
+  self.assertEqual(result.status,'ok',result.notes)
+  self.assertIn('本轮额度范围更新成功',result.message)
+  progress=SearchStore(self.store).current_progress(self.scope.local_date)
+  self.assertEqual({p.section:p.status for p in progress},{'growth':'partial','keyword':'done'})
+  rows=self.store.daily_recommendations(self.scope.local_date)
+  self.assertEqual(len(rows),6);self.assertEqual(len({r.repo_id for r in rows}),6)
+
  setUp=LocalDiscoveryTests.setUp
  engine=LocalDiscoveryTests.engine
  def jobs(self,fail_keyword=False):

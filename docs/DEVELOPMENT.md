@@ -159,3 +159,7 @@ README 截图集中在 `docs/images/`，展示实际使用时保存的项目与�
 3. _wait_core_steps先等待retry_not_before，再读/rate_limit。按服务器时间等待，取消有效，恢复后读取真实remaining；后台有限预算不无限等待。网络失败或未知恢复时间保留失败原因，不能伪造额度。
 4. SearchJobs全局refresh与所有活动／已准备模块租约一起续期；continue_keyword也有心跳。取消、配置或日期变化的旧任务不得写新榜单。单次网络超时保留，取消整轮分钟截断不等于请求永久阻塞。
 5. 候选、来源、查询断点、关键词扩词、当日资格与已发布历史保留在SQLite；日增数含零保存最近30天，同一日有效期六小时。未完成证据可复用，新统计日仍需取得新官方事实，累计Star差值不能代替新增。
+
+## 单轮范围回归
+
+配额截止、网络与配额混合、有效零日增、剩余缓存、GraphQL混合错误与恢复、来源取消留存、查询轮转均使用隔离确定性测试。产品动态英文状态同时运行 `python -m unittest tests.test_status_i18n` 和 `node tests/status_i18n.cjs`；浏览器交互仍运行 `node tests/browser_interaction.cjs`。单轮成功只代表已验证额度范围，不以旧版本缓存测试代替新版本首次实测。

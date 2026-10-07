@@ -202,6 +202,9 @@ class GitHubClient:
                 raw=response.read(MAX_RESPONSE_BYTES+1)
                 if len(raw)>MAX_RESPONSE_BYTES:raise GitHubRequestError('GitHub批量响应超过大小限制')
             body=json.loads(raw.decode('utf-8'))
+            if isinstance(body,dict) and any(isinstance(e,dict) and e.get('type')=='RATE_LIMITED' for e in (body.get('errors') or ())):
+                if not all(isinstance(e,dict) and e.get('type')=='RATE_LIMITED' for e in body['errors']):raise GitHubRequestError('GitHub批量元数据存在独立错误；未当作额度范围成功')
+                raise GitHubRateLimitError(self.graphql_reset_at,path='/graphql')
             if not isinstance(body,dict) or not isinstance(body.get('data'),dict):raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
             aliases={'r'+str(i) for i in range(len(names))}
             if not aliases.issubset(body['data']):raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
@@ -449,7 +452,7 @@ class GitHubClient:
     def renew_expired_quotas(self, now=None):
         """A passed server reset permits one fresh probe, never assumes a quota."""
         now = time.time() if now is None else now
-        for resource in ("core", "search"):
+        for resource in ("core", "search", "graphql"):
             reset = getattr(self, resource + "_reset_at")
             if reset is not None and now >= reset:
                 setattr(self, resource + "_remaining", None)

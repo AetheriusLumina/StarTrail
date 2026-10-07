@@ -23,13 +23,14 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
     if not lease.acquired:return e.search.progress(lease.job_id)
     e.current_lease=lease
     e.deferred_publication=None;e._timing=SearchTiming(e.clock);e._timing.resume();e._ai_seconds=0
-    p=replace(e.search.progress(lease.job_id),status='running',stage='expanding',notes=(),started_at=e.now().isoformat(),judgment_calls=0,catalog_calls=0,newly_checked=0,checked_completed=0,matched_count=0,search_mode='discovery')
+    p=replace(e.search.progress(lease.job_id),status='running',stage='expanding',notes=(),started_at=e.now().isoformat(),judgment_calls=0,catalog_calls=0,newly_checked=0,checked_completed=0,matched_count=0,search_mode='discovery',limited=False,quota_limited=False,failed=False,pending=0,official_checked=0,cache_hits=0,metadata_pending=0)
     def metrics():return dict(elapsed_seconds=round(max(0,e.clock()-started),3),ai_seconds=round(e._ai_seconds,3),stage_seconds=e._timing.snapshot())
     last_saved=[started-1]
     def tick(**changes):
         nonlocal p
         if event.is_set():raise AIOutputError('检索已取消')
         if e.clock()>=deadline:raise AIOutputError('检索时间保护已到，候选及断点保留；榜单未保存')
+        if changes.get('limited') and not changes.get('quota_limited') and 'failed' not in changes:changes['failed']=True
         if 'notes' in changes:changes['notes']=tuple(dict.fromkeys((*p.notes,*changes['notes'])))
         important=changes.get('stage',p.stage)!=p.stage or changes.get('limited',False)!=p.limited or 'ai_started_at' in changes
         e._timing.switch(changes.get('stage',p.stage));changes.update(metrics());p=replace(p,**changes)
@@ -118,7 +119,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
             if len(prepared)%20==0:yield p
         if scope.section=='keyword':e.search.save_judgments(scope,prepared,tuple(verdicts.values()),(),e.now().isoformat())
         if scope.section=='growth':pending=max(pending,p.pending)
-        tick(stage='ranking',matched_count=sum(v.verdict=='relevant' for v in verdicts.values()),unique=len(prepared),pending=pending,limited=p.limited or e.sources.limited or bool(pending),notes=tuple(dict.fromkeys((*p.notes,*e.sources.notes,*(result.notes if result else ())))))
+        tick(stage='ranking',matched_count=sum(v.verdict=='relevant' for v in verdicts.values()),unique=len(prepared),pending=pending,limited=p.limited or e.sources.limited or bool(pending),quota_limited=p.quota_limited or getattr(e.sources,'quota_limited',False),failed=p.failed or getattr(e.sources,'failed',e.sources.limited),metadata_pending=getattr(e.sources,'metadata_pending',0),notes=tuple(dict.fromkeys((*p.notes,*e.sources.notes,*(result.notes if result else ())))))
         observations=tuple(item.observation for item in prepared)
         snapshots=tuple(StarSnapshot(o.repo.id,scope.local_date,o.repo.stars,o.observed_at) for o in observations)
         coverage=GrowthCoverage(p.candidate_pool,p.official_checked,('github_search','github_trending','trendshift'),scope.stat_date,'github_daily_new',stop_reasons=p.notes) if scope.section=='growth' else None
@@ -130,14 +131,15 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         picks=ranked({r.repo_id for r in current}-own,own)
         value=Publication(scope,lease.generation,observations,snapshots,picks,coverage)
         tick(stage='publishing');yield p
-        if p.limited:raise AIOutputError('本轮检索或官方证据未完成，整份旧榜保留')
+        if p.failed or (p.limited and not p.quota_limited):raise AIOutputError('本轮检索或官方证据未完成，整份旧榜保留')
+        if p.quota_limited and not prepared and (scope.section!='growth' or not p.official_checked):raise AIOutputError('本轮额度不足且没有可核实结果，整份旧榜保留')
         if defer_publish:
             e.deferred_publication=(value,lease);p=replace(p,status='ready',stage='prepared',**metrics())
         else:
             while not getattr(e,'can_publish',lambda:True)():yield p
             current=e.store.daily_recommendations(scope.local_date);own={r.repo_id for r in current if r.section==scope.section and r.keyword_id==scope.keyword_id}
             e.search.publish(replace(value,recommendations=ranked({r.repo_id for r in current}-own,own)),lease,now=e.now(),cancel_event=event)
-            p=replace(p,status='done',stage='complete',**metrics())
+            p=replace(p,status='partial' if p.quota_limited else 'done',stage='complete',**metrics())
         e.search.save_progress(p,lease=lease)
     except GeneratorExit:
         p=replace(p,status='canceled',stage='stopped',limited=True,notes=(*p.notes,'检索已取消，断点保留'),**metrics());e.search.save_progress(p,lease=lease);raise

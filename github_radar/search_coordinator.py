@@ -382,7 +382,7 @@ class SearchCoordinator:
             return
         total=sum(1 for row in self.search.frontier(scope) if not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars)
         tick(pending=total)
-        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope));workers=(2 if self.legacy_review else self.client.request_concurrency) if isinstance(self.client,GitHubClient) else 1
+        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope) if self.legacy_review else self.search.growth_frontier(scope));workers=(2 if self.legacy_review else self.client.request_concurrency) if isinstance(self.client,GitHubClient) else 1
         def fetch(repo):
             def official(call,*args):
                 from urllib.error import URLError,HTTPError
@@ -410,12 +410,15 @@ class SearchCoordinator:
                 return current,official(self.client.star_history_weeks,current.full_name),False
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='star-history') as pool:
             from collections import deque
-            exhausted=False;retry_rows=deque();needs_wait=False;transient_retries={}
+            exhausted=False;retry_rows=deque();needs_wait=False;quota_stop=False;transient_retries={};unrecovered=set()
             while not exhausted or retry_rows:
                 # Previous request wave is fully drained before any yield/wait:
                 # cooperative modules may otherwise replace the shared budget.
                 if needs_wait:
-                    if not (yield from self._wait_core_steps(budget,tick,event)):
+                    if not self.legacy_review and self.clock()<budget.deadline:
+                        quota_stop=True
+                        tick(limited=True,quota_limited=True,notes=('本轮请求额度已到预留线；未处理候选和检索断点保留，下次更新继续',))
+                    elif not (yield from self._wait_core_steps(budget,tick,event)):
                         tick(limited=True,notes=('官方日增核算达到请求预算，未核算候选保留断点',));break
                     needs_wait=False
                 tick(stage='measuring');batch=[]
@@ -429,9 +432,11 @@ class SearchCoordinator:
                     if repo.archived or repo.stars<scope.min_stars:continue
                     cached_day=self.search.load_star_day(repo.id,scope.stat_date,self.now())
                     if cached_day is not None:
+                        unrecovered.discard(repo.id)
                         checked+=1;cached_count+=1;tick(official_checked=checked,cache_hits=cached_count,pending=max(0,total-checked))
                         if cached_day.added>0:measured.append((row,cached_day,repo.stars))
                         continue
+                    if quota_stop:continue
                     cached=getattr(self.client,'has_cached_star_history',lambda name:False)(repo.full_name)
                     if not cached and not budget.can_spend('core',1,self.clock()):
                         retry_rows.appendleft(row);needs_wait=True;break
@@ -440,6 +445,7 @@ class SearchCoordinator:
                     try:
                         current,weeks,unavailable=future.result()
                         if unavailable:
+                            unrecovered.discard(repo.id)
                             if current==repo:self.search.mark_unavailable(repo.id,scope.local_date)
                             else:self.search.save_candidates(scope,(ObservedRepository(current,self.now().isoformat()),),())
                             total-=1;tick(pending=max(0,total-checked),notes=('仓库当前不可访问或已不符合条件，今日排除；历史保留，后续更新重新检查',))
@@ -451,6 +457,7 @@ class SearchCoordinator:
                         if day is None:
                             tick(limited=True,notes=('官方统计日或UTC边界无法验证，未当作零日增',))
                         else:
+                            unrecovered.discard(repo.id)
                             self.search.save_star_day(repo.id,day,self.now());checked+=1;tick(official_checked=checked,pending=max(0,total-checked))
                         self.store.mark_catalog_scored(repo.id,self.now().isoformat())
                         if day and day.added>0:measured.append((row,day,repo.stars))
@@ -462,10 +469,11 @@ class SearchCoordinator:
                             from http.client import HTTPException
                             transient=isinstance(exc,GitHubRequestError) and (exc.status in (500,502,503,504) or (exc.status is None and not isinstance(exc.__cause__,HTTPError) and isinstance(exc.__cause__,(URLError,TimeoutError,ConnectionError,HTTPException,OSError))))
                             if isinstance(self.client,GitHubClient) and transient and transient_retries.get(repo.id,0)<1:
-                                transient_retries[repo.id]=1;retry_rows.append(row)
+                                transient_retries[repo.id]=1;retry_rows.append(row);unrecovered.add(repo.id)
                                 tick(notes=('暂时网络请求失败，保留仓库到后续波次重试；已完成证据复用',))
                             else:tick(limited=True,notes=(str(exc)[:300],))
                 yield None,None
+        if unrecovered:tick(limited=True,failed=True,notes=('网络重试尚未成功，已保留上次榜单',))
         measured.sort(key=lambda item:(-item[1].added,-item[2],item[0]['repo_id']))
         for row,day,_ in measured:yield row,day
 

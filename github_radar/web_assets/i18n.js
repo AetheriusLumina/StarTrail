@@ -2,6 +2,9 @@
 
 // The Chinese source text is the lookup key so product copy stays readable beside its translation.
 const RADAR_EN = Object.freeze({
+...{"GitHub批量元数据存在独立错误": "GitHub batch metadata contains an independent error", "未当作额度范围成功": "Not treated as quota-scope success"},
+...{"本轮请求额度已到预留线": "This round has reached the request quota reserve", "本轮额度不足且没有可核实结果，整份旧榜保留": "No verifiable results within this round’s quota; the saved issue is kept", "本轮检索或官方证据未完成，整份旧榜保留": "Search or official evidence is incomplete; the saved issue is kept", "网络重试尚未成功，已保留上次榜单": "Network retry has not recovered; the saved issue is kept", "暂时网络请求失败，保留仓库到后续波次重试": "Temporary network failure; keeping the repository for one later retry wave", "已完成证据复用": "Completed evidence is reused", "官方统计日或UTC边界无法验证，未当作零日增": "Official statistical day or UTC boundary could not be verified; not treated as zero growth", "仓库当前不可访问或已不符合条件，今日排除": "Repository currently unavailable or ineligible; excluded today", "历史保留，后续更新重新检查": "History is kept; later updates will check again"},
+...{"已完成核算保留，可取消": "Completed measurements are kept; cancellation is available", "检索已取消": "Search cancelled", "检索已取消，断点保留": "Search cancelled; resume cursor kept", "来源顺序与官方新增排名分别保存": "Source order and official daily-growth ranking are saved separately", "主题首批候选，未核实全量分页": "Initial topic candidates; full pagination has not been verified", "网站 AI 分类不是本软件 AI 精选": "The website AI classification is not an AI selection by this app", "本轮额度范围更新成功": "Update succeeded within this round’s quota coverage", "未处理候选和检索断点保留，下次更新继续": "Pending candidates and search cursors are kept for the next update"},
 "取消更新并删除安装包":"Cancel update and delete installer",
 "关闭":"Close",
 "软件更新失败":"Software update failed",
@@ -345,6 +348,8 @@ const RADAR_EN = Object.freeze({
   "退出 StarTrail？正在运行的 AI 分析会停止，数据更新会先完成。": "Exit StarTrail? Active AI analysis stops, and data updates finish first.",
 });
 
+
+
 function t(value, values = {}) {
   const template = typeof language !== "undefined" && language === "en"
     ? (RADAR_EN[value] || value) : value;
@@ -359,7 +364,13 @@ function tr(value) {
 function localizeServerText(value) {
   if (language !== "en" || typeof value !== "string") return value;
   if (RADAR_EN[value]) return RADAR_EN[value];
+  if(value.includes('；'))return value.split('；').map(localizeServerText).join('; ');
+  const colon=value.indexOf('：');
+  if(colon>=0&&RADAR_EN[value.slice(0,colon)])return RADAR_EN[value.slice(0,colon)]+': '+localizeServerText(value.slice(colon+1));
   const patterns = [
+    [/^GitHub限流等待至 (.+)$/, (_, date) => `GitHub rate limit: waiting until ${date}`],
+    [/^GitHub额度恢复前等待至 (.+)$/, (_, date) => `Waiting for GitHub quota recovery until ${date}`],
+    [/^实际读取 (\d+) 个项目$/, (_, count) => `Read ${count} repositories`],
     [/^关键词：(.+)$/, (_, term) => `Keyword: ${term}`],
     [/^新增 ([\d,]+) Star$/, (_, count) => `+${count} new Stars`],
     [/^GitHub 统计日：(.+)$/, (_, day) => `GitHub statistical date: ${day}`],

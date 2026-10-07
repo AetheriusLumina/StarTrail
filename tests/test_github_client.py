@@ -29,6 +29,24 @@ class FakeResponse(io.BytesIO):
 
 
 class GithubClientTests(unittest.TestCase):
+    def test_graphql_mixed_limit_and_permission_error_stays_failure(self):
+        payload={'data':None,'errors':[{'type':'RATE_LIMITED'},{'type':'FORBIDDEN'}]}
+        client=GitHubClient(opener=lambda *a,**kw:FakeResponse(payload),token_provider=lambda:'isolated-test')
+        try:client.get_repositories_batch(('org/repo',))
+        except GitHubRateLimitError:self.fail('independent permission failure must not become quota success')
+        except GitHubRequestError:pass
+        else:self.fail('invalid response accepted')
+
+    def test_graphql_expired_zero_is_reset_with_other_quotas(self):
+        client=GitHubClient();client.graphql_remaining=0;client.graphql_reset_at=10
+        client.renew_expired_quotas(now=11)
+        self.assertIsNone(client.graphql_remaining);self.assertIsNone(client.graphql_reset_at)
+
+    def test_graphql_http_200_explicit_rate_limit_is_quota_not_invalid_metadata(self):
+        payload={'data':None,'errors':[{'type':'RATE_LIMITED','message':'quota exhausted'}]}
+        client=GitHubClient(opener=lambda *a,**kw:FakeResponse(payload,{'x-ratelimit-resource':'graphql','x-ratelimit-remaining':'0','x-ratelimit-reset':'9999999999'}),token_provider=lambda:'isolated-test')
+        with self.assertRaises(GitHubRateLimitError):client.get_repositories_batch(('org/repo',))
+
     def test_star_history_weeks_preserve_raw_timestamp_and_reject_invalid_values(self):
         self.assertTrue(hasattr(GitHubClient, "star_history_weeks"), "raw week interface missing")
         payload = [{"week": 1789862400, "days": [1, 2, 3, 4, 5, 6, 7]}]

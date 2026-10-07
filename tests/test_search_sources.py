@@ -10,6 +10,79 @@ from github_radar.discovery_types import SearchPage,RequestBudget,DiscoveryCandi
 from tests.test_storage import repository
 
 class SearchSourcesTests(unittest.TestCase):
+    def test_trending_save_error_is_not_swallowed_as_auxiliary_network_failure(self):
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        source=SearchSources(SimpleNamespace(),self.store,SimpleNamespace(repo_names=lambda:('org/new',)),None,lambda:0)
+        with patch.object(self.store,'save_discovery_batch',side_effect=sqlite3.OperationalError('disk I/O error')):
+            with self.assertRaises(sqlite3.OperationalError):next(source.collect_steps(self.scope,None,None,self.budget,threading.Event(),lambda *a:None))
+
+    def test_successful_daily_source_is_kept_when_later_topic_fails(self):
+        from types import SimpleNamespace
+        from contextlib import closing
+        from github_radar.discovery_types import DiscoveryBatch
+        from github_radar.public_http import SourceRequestError
+        batch=DiscoveryBatch('trendshift_daily',(DiscoveryCandidate('org/new',None,('trendshift_daily',),'2026-10-04T10:00:00Z'),),None,True,())
+        def topic(*a):raise SourceRequestError('site topic unavailable')
+        source=SearchSources(SimpleNamespace(),self.store,None,SimpleNamespace(daily=lambda *a:(batch,),topic=topic),lambda:0)
+        iterator=source.collect_steps(self.scope,QueryExpansion(self.scope.term,(),('ai skills',),'1'),None,self.budget,threading.Event(),lambda *a:None)
+        next(iterator);iterator.close()
+        with closing(self.store._connect()) as db:self.assertIsNotNone(db.execute("SELECT full_name FROM discovery_catalog WHERE full_name='org/new'").fetchone())
+
+    def test_trending_identity_and_evidence_are_saved_before_query_or_cancel(self):
+        from types import SimpleNamespace
+        from contextlib import closing
+        source=SearchSources(SimpleNamespace(),self.store,SimpleNamespace(repo_names=lambda:('org/new',)),None,lambda:0)
+        iterator=source.collect_steps(self.scope,None,None,self.budget,threading.Event(),lambda *a:None)
+        next(iterator);iterator.close()
+        with closing(self.store._connect()) as db:
+            self.assertIsNotNone(db.execute("SELECT full_name FROM discovery_catalog WHERE full_name='org/new'").fetchone())
+            evidence=db.execute("SELECT observed_at FROM source_evidence WHERE full_name='org/new' AND source_name='github_trending'").fetchone()
+            self.assertIsNotNone(evidence)
+
+    def test_productive_query_gets_extra_page_without_starving_other_terms(self):
+        calls=[]
+        class Client:
+            def search_page(_self,q,page=1,**kw):
+                calls.append((q,page))
+                offset=1000 if '"novel"' in q else 2000 if '"slow"' in q else 0
+                return SearchPage(tuple(repository(offset+page*100+i,2000) for i in range(100)),500,False)
+        source=SearchSources(Client(),self.store,None,None,lambda:0)
+        # Prime a prior productivity observation: novel yields new candidates,
+        # while the other lane has been heavily duplicated.
+        SearchStore(self.store).save_cursor(self.scope,'github-yield:novel',{'requests':2,'new_candidates':200})
+        SearchStore(self.store).save_cursor(self.scope,'github-yield:slow',{'requests':20,'new_candidates':1})
+        self.budget.search_remaining=4
+        source.collect(self.scope,QueryExpansion(self.scope.term,('novel','slow'),(),'1'),None,self.budget,threading.Event(),lambda *a:None)
+        self.assertEqual(len(calls),4)
+        self.assertTrue(any('"slow"' in q for q,_ in calls[:3]))
+        self.assertIn('"novel"',calls[3][0])
+
+    def test_source_candidates_without_metadata_quota_are_durable_not_lost(self):
+        from types import SimpleNamespace
+        from github_radar.discovery_types import DiscoveryBatch
+        batch=DiscoveryBatch('trendshift_daily',(DiscoveryCandidate('org/new',None,('trendshift_daily',),'2026-10-04T10:00:00Z'),),None,True,())
+        client=SimpleNamespace(search_page=lambda *a,**kw:SearchPage((),0,False))
+        source=SearchSources(client,self.store,None,SimpleNamespace(daily=lambda *a:(batch,)),lambda:0)
+        self.budget.core_remaining=0
+        source.collect(self.scope,None,None,self.budget,threading.Event(),lambda *a:None)
+        from contextlib import closing
+        with closing(self.store._connect()) as db:
+            self.assertIsNotNone(db.execute("SELECT full_name FROM discovery_catalog WHERE full_name='org/new'").fetchone())
+        self.assertTrue(source.quota_limited);self.assertEqual(source.metadata_pending,1)
+
+    def test_keywords_share_pages_instead_of_original_query_using_all_quota(self):
+        calls=[]
+        class Client:
+            def search_page(_self,q,**kw):
+                calls.append(q);return SearchPage(tuple(repository(i,2000) for i in range(1,101)),300,False)
+        source=SearchSources(Client(),self.store,None,None,lambda:0)
+        self.budget.search_remaining=2
+        source.collect(self.scope,QueryExpansion(self.scope.term,('agent-skill',),(),'1'),None,self.budget,threading.Event(),lambda *a:None)
+        self.assertEqual(len(calls),2)
+        self.assertIn('"agent-skill"',calls[1]);self.assertTrue(source.quota_limited)
+
     def test_new_authenticated_metadata_is_batched_without_per_repository_rest(self):
         from github_radar.github_client import GitHubClient
         calls=[]

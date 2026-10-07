@@ -80,6 +80,9 @@ class SearchProgress:
     checked_completed: int = 0
     candidate_pool: int = 0
     limited: bool = False
+    metadata_pending: int = 0
+    quota_limited: bool = False
+    failed: bool = False
     # Timings reset per attempt; daily paid-use counters deliberately do not.
     started_at: str = ''
     elapsed_seconds: float = 0

@@ -647,6 +647,16 @@ async function testCompactReturningGrowthAndSidebar() {
   assert.equal(app.node('nav-history').getAttribute('aria-current'), 'page');
 }
 
+async function testQuotaScopeRemainsVisibleAfterReload() {
+  const app=scenario();await flush();
+  app.setIssue({search_progress:[{section:'growth',status:'partial',stage:'complete',quota_limited:true,collected:6000,candidate_pool:15000,official_checked:4990,pending:4010,metadata_pending:12,cache_hits:0}]});
+  await vm.runInContext('loadIssue()',app.context);
+  assert(app.node('issue-notes').textContent.includes('额度范围完成'));
+  vm.runInContext("language='en'",app.context);
+  await vm.runInContext('loadIssue()',app.context);
+  assert(app.node('issue-notes').textContent.includes('quota scope complete'));
+}
+
 async function testUpdatePollingPreservesTranslatedGrowthNodes() {
   const app=scenario();await flush();
   const card={repo_id:1,title:'owner/project',description:'Original description',tags:['Tool'],stars:'★ 2000',growth:'+200 Star'};
@@ -1135,6 +1145,7 @@ async function testMainPageTransitionsAndSavedKeywordSwitch(){
   await testSixFactsAndFullReadmeTables();
   await testCompactReturningGrowthAndSidebar();
   await testUpdatePollingPreservesTranslatedGrowthNodes();
+  await testQuotaScopeRemainsVisibleAfterReload();
   await testContinuousFontPreviewAndSerializedSave();
   await testDelayedExit();
   await testExitAfterInternalNavigation();

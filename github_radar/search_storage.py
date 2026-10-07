@@ -346,6 +346,35 @@ class SearchStore:
                 db.execute('DELETE FROM recommendations WHERE local_date=? AND section=? AND COALESCE(keyword_id,0)=?',(value.scope.local_date,value.scope.section,value.scope.keyword_id or 0))
             for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db)
 
+    def growth_frontier(self,scope):
+        """Prioritize current trends and previous leaders, then rotate old work.
+
+        Freeze identities only: network writes may change last_scored_at during
+        the scan. Payloads stay in SQLite and are read a hundred at a time.
+        Priority is scheduling, never the final daily-growth ranking.
+        """
+        with closing(self.store._connect()) as db:
+            identities=[r[0] for r in db.execute("""
+                SELECT c.repo_id FROM search_candidates c
+                LEFT JOIN discovery_catalog d ON d.repo_id=c.repo_id
+                WHERE c.scope_key=?
+                GROUP BY c.repo_id
+                ORDER BY CASE
+                  WHEN EXISTS(SELECT 1 FROM source_evidence e WHERE e.repo_id=c.repo_id
+                    AND substr(e.observed_at,1,10) IN (?,?)
+                    AND (e.source_name='github_trending' OR e.source_name='trendshift_daily')) THEN 0
+                  WHEN c.repo_id IN (SELECT repo_id FROM recommendations WHERE section='growth'
+                    AND local_date=(SELECT MAX(local_date) FROM recommendations WHERE section='growth' AND local_date<?)) THEN 1
+                  ELSE 2 END,
+                  COALESCE(MAX(d.last_scored_at),''),json_extract(c.payload,'$.stars') DESC,c.repo_id
+                """,(scope_key(scope),scope.local_date,scope.stat_date,scope.local_date))]
+        for offset in range(0,len(identities),100):
+            ids=identities[offset:offset+100]
+            with closing(self.store._connect()) as db:
+                values={r['repo_id']:r for r in db.execute('SELECT repo_id,payload,observed_at FROM search_candidates WHERE scope_key=? AND repo_id IN ('+','.join('?' for _ in ids)+')',(scope_key(scope),*ids))}
+            for identity in ids:
+                if identity in values and not self.unavailable(identity,scope.local_date):yield values[identity]
+
     def frontier(self,scope):
         # Close each read before network/cache writes; no cursor spans a task.
         after_stars=None;after_id=0;visited=set()

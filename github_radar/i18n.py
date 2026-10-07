@@ -158,6 +158,12 @@ _EN.update({"查看原文":"View original", "显示译文":"Show translation",
             "部分内容未翻译，保留原文":"Some content remains in its original language"})
 
 
+_EN.update({'已完成核算保留，可取消': 'Completed measurements are kept; cancellation is available', '检索已取消': 'Search cancelled', '检索已取消，断点保留': 'Search cancelled; resume cursor kept', '来源顺序与官方新增排名分别保存': 'Source order and official daily-growth ranking are saved separately', '主题首批候选，未核实全量分页': 'Initial topic candidates; full pagination has not been verified', '网站 AI 分类不是本软件 AI 精选': 'The website AI classification is not an AI selection by this app', '本轮额度范围更新成功': 'Update succeeded within this round’s quota coverage', '未处理候选和检索断点保留，下次更新继续': 'Pending candidates and search cursors are kept for the next update'})
+
+_EN.update({'本轮请求额度已到预留线': 'This round has reached the request quota reserve', '本轮额度不足且没有可核实结果，整份旧榜保留': 'No verifiable results within this round’s quota; the saved issue is kept', '本轮检索或官方证据未完成，整份旧榜保留': 'Search or official evidence is incomplete; the saved issue is kept', '网络重试尚未成功，已保留上次榜单': 'Network retry has not recovered; the saved issue is kept', '暂时网络请求失败，保留仓库到后续波次重试': 'Temporary network failure; keeping the repository for one later retry wave', '已完成证据复用': 'Completed evidence is reused', '官方统计日或UTC边界无法验证，未当作零日增': 'Official statistical day or UTC boundary could not be verified; not treated as zero growth', '仓库当前不可访问或已不符合条件，今日排除': 'Repository currently unavailable or ineligible; excluded today', '历史保留，后续更新重新检查': 'History is kept; later updates will check again'})
+
+_EN.update({'GitHub批量元数据存在独立错误': 'GitHub batch metadata contains an independent error', '未当作额度范围成功': 'Not treated as quota-scope success'})
+
 def tr(language: str, key: str, **values: object) -> str:
     """Translate product generated copy; unknown strings are preserved verbatim."""
     template = _EN.get(key, key) if language == "en" else key
@@ -165,6 +171,11 @@ def tr(language: str, key: str, **values: object) -> str:
         if '；' in key:
             template = '; '.join(tr(language, part) for part in key.split('；'))
         else:
+            import re
+            patterns=((r'^GitHub限流等待至 (.+)$','GitHub rate limit: waiting until {}'),(r'^GitHub额度恢复前等待至 (.+)$','Waiting for GitHub quota recovery until {}'),(r'^实际读取 (\d+) 个项目$','Read {} repositories'))
+            for pattern, wording in patterns:
+                match=re.fullmatch(pattern,key)
+                if match:return wording.format(match.group(1))
             prefix, separator, detail = key.partition('：')
             if separator and prefix in _EN:
                 template = _EN[prefix] + ': ' + tr(language, detail)

@@ -4,7 +4,7 @@ from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date,datetime,timedelta
-from .github_client import GitHubClient, GitHubRequestError
+from .github_client import GitHubClient, GitHubRequestError, GitHubRateLimitError
 from .public_http import SourceRequestError
 from .search_storage import SearchStore,scope_key,_repository
 from .search_types import ObservedRepository
@@ -19,7 +19,29 @@ class SearchSources:
         self.client,self.store,self.trending,self.trendshift,self.clock=client,store,trending,trendshift,clock
         self.free_events=free_events
         self.metadata_workers=4
-        self.search=SearchStore(store);self.notes=[];self.limited=False;self.collected=0
+        self.search=SearchStore(store);self.notes=[];self.limited=False;self.collected=0;self.pending_names=set()
+
+    @property
+    def metadata_pending(self):return len(self.pending_names)
+
+    @property
+    def limited(self):return getattr(self,'_limited',False)
+
+    @limited.setter
+    def limited(self,value):
+        self._limited=value
+        # Ordinary incomplete facts remain a failure, independently of quota.
+        if value:self.failed=True
+        else:self.failed=False;self.quota_limited=False
+
+    def _quota_stop(self):
+        self._limited=True;self.quota_limited=True
+        self.notes.append('本轮请求额度已到预留线；未处理候选和检索断点保留，下次更新继续')
+
+    def _error(self,exc,budget):
+        exhausted=any(not budget.can_spend(r,1,self.clock()) for r in ('core','search'))
+        if isinstance(exc,GitHubRateLimitError) or (exhausted and '预算' in str(exc) and self.clock()<budget.deadline):self._quota_stop()
+        else:self.notes.append(str(exc));self.limited=True
 
     def _page(self,key,call):
         cache=getattr(self,'shared_pages',None)
@@ -63,6 +85,11 @@ class SearchSources:
             return saved['queue']
         return fresh if saved['date']!=scope.local_date else []
 
+    def _query_yield(self,scope,term):
+        with closing(self.store._connect()) as db:
+            row=db.execute('SELECT payload FROM search_cursors WHERE scope_key=? AND source=?',(scope_key(scope),'github-yield:'+term)).fetchone()
+        return json.loads(row[0]) if row else {'requests':0,'new_candidates':0}
+
     def _search_range(self,scope,term,start,end,budget,cancel_event,on_progress):
         for _ in self._search_range_steps(scope,term,start,end,budget,cancel_event,on_progress):pass
 
@@ -77,9 +104,13 @@ class SearchSources:
             query=f"{base} archived:false {stars} created:{item['start']}..{item['end']}"
             try:page=self._call(budget,'search',self.client.search_page,query,page=item['page'],per_page=100,sort='stars')
             except (GitHubRequestError,ValueError,OSError) as exc:
-                self.notes.append(str(exc));self.limited=True;break
+                self._error(exc,budget);break
+            before=self.search.candidate_count(scope)
             observed=datetime.now().astimezone().isoformat()
             self.search.save_candidates(scope,tuple(ObservedRepository(r,observed) for r in page.items),())
+            gain=max(0,self.search.candidate_count(scope)-before)
+            productivity=self._query_yield(scope,term)
+            self.search.save_cursor(scope,'github-yield:'+term,{'requests':productivity['requests']+1,'new_candidates':productivity['new_candidates']+gain})
             if scope.section=='keyword':
                 for repo in page.items:self.search.save_match(scope,repo,term,'github_name_topic' if strict else 'github_query',observed)
             for repo in page.items:self.search.mark_available(repo.id)
@@ -91,7 +122,7 @@ class SearchSources:
             elif page.total_count>1000 and any(r.stars>item['low'] for r in page.items):
                 high=item['high'] if item['high'] is not None else max(r.stars for r in page.items)
                 middle=item['low']+(high-item['low'])//2
-                queue[:1]=[dict(item,high=middle,page=1),dict(item,low=middle+1,page=1)]
+                queue[:1]=[dict(item,low=middle+1,page=1),dict(item,high=middle,page=1)]
             elif page.incomplete_results:
                 self.notes.append('GitHub 搜索结果标为不完整，保留断点待继续');self.limited=True;break
             else:
@@ -101,7 +132,9 @@ class SearchSources:
                 else:queue.pop(0)
             self._save_cursor(scope,cursor_term,queue)
             yield None
-        if queue:self.limited=True
+        if queue:
+            if not cancel_event.is_set() and self.clock()<budget.deadline and not budget.can_spend('search',1,self.clock()):self._quota_stop()
+            else:self.limited=True
         self._save_cursor(scope,cursor_term,queue)
 
     def _missing(self,identity,exc):
@@ -122,6 +155,7 @@ class SearchSources:
 
     def resolve_candidate(self,candidate,budget):
         if not valid_repository_name(candidate.full_name):return None
+        if self.clock()<budget.deadline and not budget.can_spend('core',1,self.clock()):self._quota_stop();return None
         try:
             try:repo=self._call(budget,'core',self.client.get_repository,candidate.full_name)
             except GitHubRequestError as exc:
@@ -131,13 +165,14 @@ class SearchSources:
                 repo=self._call(budget,'core',self.client.get_repository_by_id,candidate.repo_id)
             return self._accept_candidate(candidate,repo)
         except (GitHubRequestError,ValueError,OSError) as exc:
-            if not self._missing(candidate.repo_id,exc):self.notes.append(str(exc));self.limited=True
+            if not self._missing(candidate.repo_id,exc):self._error(exc,budget)
             return None
 
     def _accept_candidate(self,candidate,repo):
         if candidate.repo_id is not None and candidate.repo_id!=repo.id:
             self.notes.append('候选仓库身份变化，未覆盖原ID');return None
         self.search.mark_available(repo.id)
+        self.pending_names.discard(candidate.full_name.casefold())
         observed=datetime.now().astimezone().isoformat()
         evidence=tuple(replace(e,repo_id=repo.id,full_name=repo.full_name) for e in candidate.evidence)
         self.store.save_discovery_batch(DiscoveryBatch('verified',
@@ -145,6 +180,7 @@ class SearchSources:
         return ObservedRepository(repo,observed)
 
     def _collect_metadata_steps(self,candidates,scope,budget,cancel_event,on_progress):
+        self.pending_names.update(c.full_name.casefold() for c in candidates if valid_repository_name(c.full_name))
         # Only network waits overlap. Evidence and SQLite writes remain ordered
         # on this thread, with at most four requests/results in memory.
         if isinstance(self.client,GitHubClient) and self.client._authorization():
@@ -163,7 +199,9 @@ class SearchSources:
                     resolved[key]=known;index+=1;continue
                 if not budget.can_spend('core',1,self.clock()):
                     self.notes.append('GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新')
-                    self.limited=True;break
+                    if self.clock()<budget.deadline:self._quota_stop()
+                    else:self.limited=True
+                    break
                 width=workers if budget.can_spend('core',workers,self.clock()) else 1
                 batch=[];keys=set()
                 while index<len(candidates) and len(batch)<width:
@@ -187,7 +225,7 @@ class SearchSources:
                     except (GitHubRequestError,ValueError,OSError) as exc:
                         if getattr(exc,'status',None)==404:
                             self.notes.append('仓库 '+candidate.full_name+' 未找到或无访问权限（HTTP 404），已跳过，其他来源继续')
-                        else:self.notes.append(str(exc));self.limited=True
+                        else:self._error(exc,budget)
                         continue
                     if observation:
                         if scope.section=='keyword' and candidate.full_name.casefold() in getattr(self,'_ai_names',set()):self.search.save_match(scope,observation.repo,scope.term,'ai_search',observation.observed_at)
@@ -212,6 +250,7 @@ class SearchSources:
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='source-batch') as pool:
             for offset in range(0,len(unresolved),20*workers):
                 if cancel_event.is_set():self.limited=True;return
+                if self.client.graphql_remaining==0:self._quota_stop();return
                 if not budget.can_spend('external',1,self.clock()):self.limited=True;return
                 wave=unresolved[offset:offset+20*workers]
                 chunks=[wave[i:i+20] for i in range(0,len(wave),20)]
@@ -222,17 +261,17 @@ class SearchSources:
                         self.limited=True;return
                     try:values=future.result()
                     except (GitHubRequestError,ValueError,OSError) as exc:
-                        self.notes.append(str(exc));self.limited=True;continue
+                        self._error(exc,budget);continue
                     observations=[]
                     for key,items in chunk:
                         repo=values.get(key)
                         for candidate in items:
                             if repo is None or (candidate.repo_id is not None and repo.id!=candidate.repo_id):
                                 if candidate.repo_id is None:
-                                    self.notes.append('仓库 '+candidate.full_name+' 未找到或无访问权限，已跳过');continue
+                                    self.pending_names.discard(candidate.full_name.casefold());self.notes.append('仓库 '+candidate.full_name+' 未找到或无访问权限，已跳过');continue
                                 try:current=self._call(budget,'core',self.client.get_repository_by_id,candidate.repo_id)
                                 except (GitHubRequestError,ValueError,OSError) as exc:
-                                    if not self._missing(candidate.repo_id,exc):self.notes.append(str(exc));self.limited=True
+                                    if not self._missing(candidate.repo_id,exc):self._error(exc,budget)
                                     continue
                             else:current=repo
                             item=self._accept_candidate(candidate,current)
@@ -252,7 +291,7 @@ class SearchSources:
             if isinstance(self.client,GitHubClient) and self.client._authorization():
                 try:resolved=supplied.result() if supplied is not None else self.client.get_repositories_batch(names)
                 except (GitHubRequestError,ValueError,OSError) as exc:
-                    self.notes.append(str(exc));self.limited=True;return
+                    self._error(exc,budget);return
                 for repo in rows:
                     updated=resolved.get(repo.full_name.casefold())
                     if updated is None or updated.id!=repo.id:
@@ -260,7 +299,7 @@ class SearchSources:
                         # a new repository occupying the old name to this ID.
                         try:updated=self._call(budget,'core',self.client.get_repository_by_id,repo.id)
                         except (GitHubRequestError,ValueError,OSError) as exc:
-                            if not self._missing(repo.id,exc):self.notes.append(str(exc));self.limited=True
+                            if not self._missing(repo.id,exc):self._error(exc,budget)
                             continue
                     candidate=DiscoveryCandidate(repo.full_name,repo.id,('tracked',),datetime.now().astimezone().isoformat())
                     item=self._accept_candidate(candidate,updated)
@@ -270,7 +309,7 @@ class SearchSources:
                 for repo in rows:
                     item=self.resolve_candidate(DiscoveryCandidate(repo.full_name,repo.id,('tracked',),datetime.now().astimezone().isoformat()),budget)
                     if item:self.search.save_candidates(scope,(item,),())
-                    elif not self.search.unavailable(repo.id,scope.local_date):self.limited=True
+                    elif not self.search.unavailable(repo.id,scope.local_date) and not self.quota_limited:self.limited=True
         parallel=isinstance(self.client,GitHubClient) and bool(self.client._authorization())
         workers=min(4,max(1,self.metadata_workers)) if parallel else 1
         def flush(rows,pool):
@@ -298,7 +337,7 @@ class SearchSources:
         for _ in self.collect_steps(scope,expansion,ai_result,budget,cancel_event,on_progress):pass
 
     def collect_steps(self,scope,expansion,ai_result,budget,cancel_event,on_progress):
-        self.notes=[];self.limited=False;self.collected=0;self.source_status={}
+        self.notes=[];self.limited=False;self.collected=0;self.source_status={};self.pending_names=set()
         prior={name:getattr(self.client,name,None) for name in ('budget','clock')}
         if hasattr(self.client,'budget'):self.client.budget=budget;self.client.clock=self.clock
         candidates=list(ai_result.candidates) if ai_result else []
@@ -308,19 +347,24 @@ class SearchSources:
             if self.trendshift and budget.can_spend('external',1,self.clock()):
                 self.trendshift.budget=budget;self.trendshift.clock=self.clock
                 try:
-                    batches=list(self._page(('trendshift_daily',),lambda:self.trendshift.daily(datetime.now().astimezone().isoformat())))
+                    for batch in self._page(('trendshift_daily',),lambda:self.trendshift.daily(datetime.now().astimezone().isoformat())):
+                        self.store.save_discovery_batch(batch)
+                        candidates.extend(batch.candidates);self._source_batch(batch)
                     for topic in (expansion.topics if expansion else ()):
                         if cancel_event.is_set() or not budget.can_spend('external',1,self.clock()):break
-                        batches.append(self._page(('trendshift_topic',topic),lambda topic=topic:self.trendshift.topic(topic,datetime.now().astimezone().isoformat())))
-                    for batch in batches:
+                        batch=self._page(('trendshift_topic',topic),lambda topic=topic:self.trendshift.topic(topic,datetime.now().astimezone().isoformat()))
+                        self.store.save_discovery_batch(batch)
                         candidates.extend(batch.candidates);self._source_batch(batch)
                 except (SourceRequestError,ValueError,OSError) as exc:self.notes.append('Trendshift: '+str(exc));self.source_status['trendshift']={'status':'failed','count':0}
             if self.trending and budget.can_spend('external',1,self.clock()):
                 try:
                     names=self._page(('github_trending',),self.trending.repo_names)
-                    candidates.extend(DiscoveryCandidate(n,None,('github_trending',),datetime.now().astimezone().isoformat()) for n in names)
+                    observed=datetime.now().astimezone().isoformat()
+                    entries=tuple(DiscoveryCandidate(n,None,('github_trending',),observed,evidence=(SourceEvidence(source_name='github_trending',full_name=n,source_url='https://github.com/trending',observed_at=observed,period='day',stat_date=None,rank_kind='source',source_rank=index+1,total_stars_text=None,daily_added_text=None),)) for index,n in enumerate(names))
+                    self.store.save_discovery_batch(DiscoveryBatch('github_trending',entries,None,True,()))
+                    candidates.extend(entries)
                     self.source_status['github_trending']={'status':'complete','count':len(names)}
-                except Exception as exc:self.notes.append('GitHub Trending: '+str(exc));self.source_status['github_trending']={'status':'failed','count':0}
+                except (SourceRequestError,GitHubRequestError,ValueError,OSError) as exc:self.notes.append('GitHub Trending: '+str(exc));self.source_status['github_trending']={'status':'failed','count':0}
             if scope.section=='growth':
                 tracked=[r for r,_,_ in self.store.followed_repositories()]+self.store.recent_growth_repositories(scope.local_date,limit=200)
                 candidates.extend(DiscoveryCandidate(r.full_name,r.id,('tracked',),datetime.now().astimezone().isoformat()) for r in tracked)
@@ -346,11 +390,31 @@ class SearchSources:
             # IDs are still refreshed and ranked from the durable full catalog.
             # Awake-only preparation resumes the all-age discovery cursor.
             start=date.fromisoformat(scope.local_date)-timedelta(days=30) if scope.section=='growth' and getattr(self,'daily_discovery',False) else date(2007,1,1)
-            for term in dict.fromkeys(terms):
-                if cancel_event.is_set() or not budget.can_spend('search',1,self.clock()):
-                    if not cancel_event.is_set():self.notes.append('GitHub 搜索请求额度或时间预算不足，检索断点已保留；额度恢复后可继续更新')
-                    self.limited=True;break
-                yield from self._search_range_steps(scope,term,start,date.fromisoformat(scope.local_date),budget,cancel_event,on_progress)
+            lanes=[(term,self._search_range_steps(scope,term,start,date.fromisoformat(scope.local_date),budget,cancel_event,on_progress)) for term in dict.fromkeys(terms)]
+            try:
+                while lanes and not cancel_event.is_set():
+                    active=[]
+                    # Every live query receives a turn, including low-yield
+                    # aliases. One additional page rewards new-candidate yield.
+                    for term,lane in lanes:
+                        try:next(lane)
+                        except StopIteration:continue
+                        active.append((term,lane));yield None
+                    lanes=active
+                    if len(lanes)>1 and budget.can_spend('search',1,self.clock()):
+                        def score(item):
+                            value=self._query_yield(scope,item[0])
+                            return value['new_candidates']/(value['requests']+1)
+                        best=max(lanes,key=score)
+                        if score(best)>0:
+                            try:next(best[1])
+                            except StopIteration:lanes.remove(best)
+                            else:yield None
+            finally:
+                for _,lane in lanes:lane.close()
+            # Retain unverified source identities before spending official quota.
+            # Their external metadata is not inserted into the ranked frontier.
+            if candidates:self.store.save_discovery_batch(DiscoveryBatch('public_candidates',tuple(candidates),None,True,()))
             yield from self._collect_metadata_steps(candidates,scope,budget,cancel_event,on_progress)
             if scope.section=='growth':
                 after=''

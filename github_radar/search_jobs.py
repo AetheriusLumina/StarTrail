@@ -178,7 +178,7 @@ class SearchJobs:
                         search.publish_all(tuple(values),tuple(leases),now=self.now(),cancel_event=self._event,refresh_lease=lease)
                     except Exception as exc:
                         self.progress=[replace(p,status='paused',stage='stopped',limited=True,notes=(*p.notes,str(exc)[:300])) for p in self.progress]
-                    else:self.progress=[replace(p,status='done',stage='complete') for p in self.progress]
+                    else:self.progress=[replace(p,status='partial' if p.quota_limited else 'done',stage='complete') for p in self.progress]
                     for progress,module_lease in zip(self.progress,leases):search.save_progress(progress,lease=module_lease)
                 elif atomic:
                     self.progress=[replace(p,status='paused' if p.status=='ready' else p.status,stage='stopped' if p.status=='ready' else p.stage,limited=True,notes=(*p.notes,'另一榜单未完成，整份旧榜保留') if p.status=='ready' else p.notes) for p in self.progress]
@@ -213,7 +213,7 @@ class SearchJobs:
         failure_detail='；'.join((failed_notes or notes)[:3])[:500]
         failure_message='检索未完成，已保留上次结果'+('：'+failure_detail if failure_detail else '')
         result=self.service._result(day,self.store.daily_recommendations(day),'partial' if successful and interrupted else 'ok' if successful else 'error',
-            not successful,('部分更新未完成，已保留已保存结果：'+failure_detail) if successful and interrupted else '已更新；部分检索仍待继续' if successful and partial else '更新已完成' if successful else failure_message,notes)
+            not successful,('部分更新未完成，已保留已保存结果：'+failure_detail) if successful and interrupted else '本轮额度范围更新成功；未处理候选和检索断点保留，下次更新继续' if successful and partial else '更新已完成' if successful else failure_message,notes)
         if atomic and not successful:
             old=self.service.load_latest(day)
             result=replace(old,status='error',stale=True,message=failure_message,notes=notes)
