@@ -22,7 +22,7 @@ class PooledHTTPSOpener:
         self.factory=factory;self.idle=queue.LifoQueue(max_connections);self.slots=threading.BoundedSemaphore(max_connections);self.closed=False;self.lock=threading.Lock()
     def release(self,connection,reusable):
         with self.lock:
-            if reusable and not self.closed:self.idle.put_nowait(connection)
+            if reusable and not self.closed:self.idle.put_nowait((connection,time.monotonic()))
             else:connection.close()
         self.slots.release()
     def __call__(self,request,timeout=20):
@@ -36,8 +36,13 @@ class PooledHTTPSOpener:
         try:
             with self.lock:
                 if self.closed:raise OSError('GitHub client closed')
-                try:connection=self.idle.get_nowait()
-                except queue.Empty:connection=self.factory('api.github.com',timeout=timeout)
+                while connection is None:
+                    try:
+                        available,released_at=self.idle.get_nowait()
+                        if time.monotonic()-released_at>=30:
+                            available.close();continue
+                        connection=available
+                    except queue.Empty:connection=self.factory('api.github.com',timeout=timeout)
             for redirects in range(4):
                 remaining=timeout-(time.monotonic()-at)
                 if remaining<=0:raise TimeoutError('GitHub request deadline reached')
@@ -70,4 +75,4 @@ class PooledHTTPSOpener:
     def close(self):
         with self.lock:
             self.closed=True
-            while not self.idle.empty():self.idle.get_nowait().close()
+            while not self.idle.empty():self.idle.get_nowait()[0].close()

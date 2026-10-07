@@ -83,6 +83,19 @@ class AuthRaceTests(unittest.TestCase):
 if __name__=='__main__':unittest.main()
 
 class SameRefreshCacheTests(unittest.TestCase):
+ def test_busy_optional_cache_does_not_discard_fetched_official_fact(self):
+  from github_radar.search_storage import SearchRequestCache
+  from tests.test_github_client import FakeResponse,REPO_PAYLOAD
+  with tempfile.TemporaryDirectory() as folder:
+   store=RadarStore(folder);cache=SearchRequestCache(store)
+   client=GitHubClient(opener=lambda *a,**kw:FakeResponse(REPO_PAYLOAD));client.request_cache=cache
+   blocker=store._connect();blocker.execute('BEGIN IMMEDIATE')
+   at=time.monotonic()
+   try:repo=client.get_repository('org/r1')
+   finally:blocker.rollback();blocker.close()
+   self.assertEqual(repo.id,REPO_PAYLOAD['id']);self.assertLess(time.monotonic()-at,1)
+   self.assertIsNone(cache.get('/repos/org/r1'))
+   client.get_repository('org/r1');self.assertIsNotNone(cache.get('/repos/org/r1'))
  def test_valid_public_get_reused_on_disk_without_spending_more_core(self):
   from github_radar.search_storage import SearchRequestCache
   from tests.test_github_client import FakeResponse,REPO_PAYLOAD

@@ -53,6 +53,23 @@ class ConnectionReuseTests(unittest.TestCase):
   for _ in range(3):
    with pool(Request('https://api.github.com/repos/a/b'),timeout=2) as response:self.assertEqual(response.read(),b'{}')
   self.assertEqual(len(made),1);pool.close()
+ def test_idle_connection_is_replaced_after_long_quota_wait(self):
+  made=[];now=[1000.0]
+  class Response(io.BytesIO):
+   status=200;reason='OK';headers={};will_close=False
+   def isclosed(self):return self.tell()==len(self.getvalue())
+  class Connection:
+   sock=None
+   def __init__(self,*a,**kw):made.append(self);self.closed=False
+   def request(self,*a,**kw):pass
+   def getresponse(self):return Response(b'{}')
+   def close(self):self.closed=True
+  with patch('github_radar.github_transport.time.monotonic',side_effect=lambda:now[0]):
+   pool=self.pool(Connection)
+   with pool(Request('https://api.github.com/rate_limit'),timeout=2) as response:response.read()
+   now[0]+=1200
+   with pool(Request('https://api.github.com/rate_limit'),timeout=2) as response:response.read()
+  self.assertEqual(len(made),2);self.assertTrue(made[0].closed);pool.close()
  def test_unconsumed_response_closes_connection_before_next_request(self):
   made=[]
   class Response(io.BytesIO):

@@ -1,5 +1,5 @@
 """Durable search frontiers. A collected candidate is not a displayed item."""
-import json
+import json,sqlite3,threading,logging
 from contextlib import closing, nullcontext
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone, timedelta
@@ -399,7 +399,7 @@ class SearchLease:
 class SearchRequestCache:
     """Same-refresh public GET facts on disk, never credentials or error bodies."""
     def __init__(self,store):
-        self.store=store;self.run_id=uuid.uuid4().hex
+        self.store=store;self.run_id=uuid.uuid4().hex;self._write_lock=threading.Lock()
         with closing(store._connect()) as db,db:
             db.execute('DELETE FROM search_http_cache WHERE run_id NOT IN (SELECT run_id FROM search_http_cache GROUP BY run_id ORDER BY MAX(rowid) DESC LIMIT 2)')
     def get(self,path):
@@ -409,5 +409,14 @@ class SearchRequestCache:
     def put(self,path,payload):
         text=json.dumps(payload,ensure_ascii=False,separators=(',',':'))
         if len(text.encode('utf-8'))>262144:return
-        with closing(self.store._connect()) as db,db:
-            db.execute('INSERT OR REPLACE INTO search_http_cache VALUES(?,?,?)',(path,self.run_id,text))
+        # The optional same-refresh response cache must not turn a successful
+        # official request into a failed fact. Serialize network-worker writes;
+        # durable daily evidence and publication retain their strict transactions.
+        with self._write_lock:
+            try:
+                with closing(self.store._connect()) as db,db:
+                    db.execute('PRAGMA busy_timeout=100')
+                    db.execute('INSERT OR REPLACE INTO search_http_cache VALUES(?,?,?)',(path,self.run_id,text))
+            except sqlite3.OperationalError as exc:
+                if getattr(exc,'sqlite_errorcode',0)&255 not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):raise
+                logging.getLogger(__name__).warning('Optional request cache busy; official response retained without cache write')
