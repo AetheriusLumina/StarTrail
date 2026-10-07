@@ -115,7 +115,7 @@ def _main(
     from .github_account import GitHubAccount
     from .oauth_config import publisher_client_id
     account = GitHubAccount(store.data_dir, client_id=publisher_client_id())
-    service = RadarService(client or GitHubClient(token_provider=account.access_token,on_auth_failure=account.reject_token), store,
+    service = RadarService(client or GitHubClient(token_provider=account.access_token,on_auth_failure=account.reject_token,request_concurrency=100), store,
                            TrendingClient() if client is None else None)
     if client is None:
         from .search_jobs import install_search

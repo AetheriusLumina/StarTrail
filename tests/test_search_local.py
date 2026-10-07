@@ -23,6 +23,103 @@ class LocalDiscoveryTests(unittest.TestCase):
   self.assertEqual(p.status,'paused');self.assertEqual(p.pending,2);self.assertEqual(p.official_checked,0)
   self.assertIn('failure 1',p.notes);self.assertIn('failure 2',p.notes)
 
+ def test_growth_history_404_rechecks_identity_and_excludes_only_unavailable_repository(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);ids=[]
+  def history(name):raise GitHubRequestError('history missing',status=404)
+  def identity(value):ids.append(value);raise GitHubRequestError('identity unavailable',status=404)
+  engine.client.star_history_weeks=history;engine.client.get_repository_by_id=identity
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(ids,[1]);self.assertEqual(p.pending,0)
+  self.assertTrue(engine.search.unavailable(1,scope.local_date));self.assertEqual(p.official_checked,0)
+ def test_existing_identity_with_unavailable_statistics_still_blocks_publication(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);ids=[]
+  def history(name):raise GitHubRequestError('statistics missing',status=404)
+  def identity(value):ids.append(value);return repository(value,10001)
+  engine.client.star_history_weeks=history;engine.client.get_repository_by_id=identity
+  p=engine.run(scope)
+  self.assertEqual(p.status,'paused');self.assertEqual(ids,[1]);self.assertEqual(p.pending,1)
+  self.assertFalse(engine.search.unavailable(1,scope.local_date))
+ def test_history_404_recovers_renamed_identity_and_uses_its_current_name(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);names=[]
+  def history(name):
+   names.append(name)
+   if name!='new/name':raise GitHubRequestError('old name missing',status=404)
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+  engine.client.star_history_weeks=history
+  engine.client.get_repository_by_id=lambda value:replace(repository(value,10001),full_name='new/name')
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(len(names),2);self.assertEqual(names[-1],'new/name')
+  self.assertEqual(p.official_checked,1);self.assertEqual(p.pending,0)
+  self.assertEqual(engine.search.candidate_page(scope,None)[0].repo.full_name,'new/name')
+
+ def test_strict_matching_rejects_description_readme_and_owner_only(self):
+  search=SearchStore(self.store)
+  repo=replace(repository(7,4000),full_name='skills-owner/unrelated',description='skills',topics=())
+  search.save_match(self.scope,repo,'skills','github_query',self.now.isoformat())
+  observation=ObservedRepository(repo,self.now.isoformat())
+  self.assertEqual(search.matching_verdict(self.scope,observation,('skills',),strict=True).verdict,'uncertain')
+ def test_strict_matching_accepts_repository_name_or_topic_and_new_query_evidence(self):
+  search=SearchStore(self.store)
+  for repo in (replace(repository(7,4000),full_name='org/agent-skills',topics=()),replace(repository(8,4000),topics=('agent-skills',))):
+   observation=ObservedRepository(repo,self.now.isoformat())
+   self.assertEqual(search.matching_verdict(self.scope,observation,('agent skills',),strict=True).verdict,'relevant')
+  repo=replace(repository(9,4000),full_name='org/unrelated',description='',topics=())
+  search.save_match(self.scope,repo,'skills','github_name_topic',self.now.isoformat())
+  self.assertEqual(search.matching_verdict(self.scope,ObservedRepository(repo,self.now.isoformat()),('skills',),strict=True).verdict,'relevant')
+
+ def test_growth_retries_transient_network_once_without_excluding_identity(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);calls=[]
+  def history(name):
+   calls.append(name)
+   if len(calls)==1:raise GitHubRequestError('temporary network timeout') from TimeoutError('socket timed out')
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+  engine.client.star_history_weeks=history
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(len(calls),2)
+  self.assertFalse(engine.search.unavailable(1,scope.local_date))
+ def test_growth_network_retry_is_bounded_and_keeps_failure_pending(self):
+  from github_radar.github_client import GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);calls=[]
+  def history(name):
+   calls.append(name);raise GitHubRequestError('temporary network timeout') from TimeoutError('socket timed out')
+  engine.client.star_history_weeks=history
+  p=engine.run(scope)
+  self.assertEqual(p.status,'paused');self.assertEqual(len(calls),2);self.assertEqual(p.pending,1)
+
+ def test_growth_does_not_retry_http_rate_limit_as_network_failure(self):
+  from github_radar.github_client import GitHubRateLimitError
+  from urllib.error import HTTPError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);calls=[]
+  def history(name):
+   calls.append(name);raise GitHubRateLimitError(None) from HTTPError('https://api.github.com',429,'limited',{},None)
+  engine.client.star_history_weeks=history;p=engine.run(scope)
+  self.assertEqual(p.status,'paused');self.assertEqual(len(calls),1)
+ def test_strict_multiword_match_cannot_combine_unrelated_fields(self):
+  repo=replace(repository(7,4000),full_name='org/skills-for-poker',topics=('agent-based-simulation',))
+  self.assertEqual(SearchStore(self.store).matching_verdict(self.scope,ObservedRepository(repo,self.now.isoformat()),('agent skills',),strict=True).verdict,'uncertain')
+
+ def test_rate_limit_stops_further_frontier_waves(self):
+  from github_radar.github_client import GitHubClient
+  from urllib.error import HTTPError
+  import io
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(5);calls=[]
+  def opener(request,timeout):
+   calls.append(request.full_url);raise HTTPError(request.full_url,429,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO())
+  engine.client=GitHubClient(opener=opener,request_concurrency=1);engine.client.core_remaining=5000
+  p=engine.run(scope)
+  self.assertEqual(p.status,'paused');self.assertEqual(len(calls),1);self.assertEqual(p.pending,5)
+
  def setUp(self):
   temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);self.store=RadarStore(temp.name)
   self.now=datetime(2026,10,5,12,tzinfo=timezone.utc);rule=self.store.add_keyword('skills',1000)
@@ -35,7 +132,7 @@ class LocalDiscoveryTests(unittest.TestCase):
   client=SimpleNamespace(core_remaining=5000,search_remaining=30,readme_excerpt=forbidden)
   sources=SimpleNamespace(limited=False,notes=[],collected=count,trendshift=None)
   def collect(scope,*a):
-   SearchStore(self.store).save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000+i),description='A reusable skills collection'),self.now.isoformat()) for i in range(1,count+1)),())
+   SearchStore(self.store).save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000+i),description='A reusable skills collection',topics=('skills',)),self.now.isoformat()) for i in range(1,count+1)),())
   sources.collect=collect
   return SearchCoordinator(self.store,client,provider,sources=sources,clock=lambda:self.time[0],now=lambda:self.now)
  def test_no_ai_audit_or_readme_scan_and_more_than_200_candidates_rank_by_stars(self):

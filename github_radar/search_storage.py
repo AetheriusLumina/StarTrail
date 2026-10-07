@@ -72,28 +72,43 @@ class SearchStore:
         return sha256(json.dumps([repo.id,repo.full_name,repo.description,sorted(repo.topics),repo.language],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
     def save_match(self,scope,repo,term,kind,observed_at):
-        if kind not in ('github_query','ai_search'):raise ValueError('检索依据类型无效')
+        if kind not in ('github_query','ai_search','github_name_topic'):raise ValueError('检索依据类型无效')
         with closing(self.store._connect()) as db,db:
             db.execute('INSERT OR REPLACE INTO search_matches VALUES(?,?,?,?,?,?)',
                 (scope_key(scope),repo.id,term,kind,self.content_hash(repo),observed_at))
 
-    def matching_verdict(self,scope,observation,terms):
+    def matching_verdict(self,scope,observation,terms,*,strict=False):
         import re,unicodedata
         repo=observation.repo
         with closing(self.store._connect()) as db:
             matches=db.execute('SELECT * FROM search_matches WHERE scope_key=? AND repo_id=?',(scope_key(scope),repo.id)).fetchall()
         for match in matches:
+            if strict and match['kind']!='github_name_topic':continue
             # A fetched query match may live in README; do not pretend that an
             # unrelated old purpose still matches after metadata changes.
             age=datetime.fromisoformat(observation.observed_at)-datetime.fromisoformat(match['observed_at'])
             if match['content_hash']==self.content_hash(repo) and timedelta(0)<=age<timedelta(days=1):
                 prefix='AI 搜索依据：' if match['kind']=='ai_search' else '检索匹配：'
                 return RelevanceVerdict(repo.id,'relevant',prefix+match['term'])
-        text=unicodedata.normalize('NFKC',' '.join((repo.full_name,repo.description,*repo.topics))).casefold()
+        parts=(repo.full_name.split('/')[-1],*repo.topics) if strict else (repo.full_name,repo.description,*repo.topics)
+        text=unicodedata.normalize('NFKC',' '.join(parts)).casefold()
         for term in terms:
             words=re.findall(r'[\w]+',unicodedata.normalize('NFKC',term).casefold())
+            if strict:
+                pattern=r'(?<![a-z0-9])'+r'[\s_-]+'.join(re.escape(word) for word in words)+r'(?![a-z0-9])'
+                if words and any(re.search(pattern,unicodedata.normalize('NFKC',part).casefold()) for part in parts):
+                    return RelevanceVerdict(repo.id,'relevant','名称或主题匹配：'+term)
+                continue
             if words and all((word in text if any('\u3400'<=c<='\u9fff' for c in word) else re.search(r'(?<![a-z0-9])'+re.escape(word)+r'(?![a-z0-9])',text)) for word in words):
                 return RelevanceVerdict(repo.id,'relevant','检索匹配：'+term)
+        if strict:
+            allowed={re.sub(r'[-_\s]+',' ',unicodedata.normalize('NFKC',term).casefold()).strip() for term in terms}
+            for evidence in self.store.source_evidence(repo.id):
+                age=datetime.fromisoformat(observation.observed_at)-datetime.fromisoformat(evidence.observed_at)
+                if evidence.source_name!='trendshift_topic' or not timedelta(0)<=age<timedelta(days=1):continue
+                for topic in evidence.topics:
+                    if re.sub(r'[-_\s]+',' ',unicodedata.normalize('NFKC',topic).casefold()).strip() in allowed:
+                        return RelevanceVerdict(repo.id,'relevant','网站主题匹配：'+topic)
         return RelevanceVerdict(repo.id,'uncertain','没有当前关键词的可靠检索依据；未进行AI审核')
 
     def save_star_day(self,repo_id,day,now):

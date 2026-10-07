@@ -3,8 +3,8 @@ import hashlib
 import json
 from dataclasses import asdict
 from .ai_types import AIRepositoryInput
-from .search_types import PreparedCandidate
-from .github_client import GitHubRequestError, GitHubClient
+from .search_types import PreparedCandidate,ObservedRepository
+from .github_client import GitHubRequestError, GitHubRateLimitError, GitHubClient
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -343,15 +343,38 @@ class SearchCoordinator:
             return
         total=sum(1 for row in self.search.frontier(scope) if not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars)
         tick(pending=total)
-        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope));workers=(2 if self.legacy_review else 4) if isinstance(self.client,GitHubClient) else 1
+        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope));workers=(2 if self.legacy_review else self.client.request_concurrency) if isinstance(self.client,GitHubClient) else 1
         def fetch(repo):
-            if getattr(self.client,'budget',None) is not budget:budget.spend('core',1,self.clock())
-            return self.client.star_history_weeks(repo.full_name)
+            def official(call,*args):
+                from urllib.error import URLError,HTTPError
+                from http.client import HTTPException
+                for attempt in range(2):
+                    if event.is_set():raise GitHubRequestError('检索已取消')
+                    if getattr(self.client,'budget',None) is not budget:budget.spend('core',1,self.clock())
+                    try:return call(*args)
+                    except GitHubRequestError as exc:
+                        # Retry one idempotent read after a dropped connection;
+                        # HTTP errors, exhausted budgets and invalid data are not network retries.
+                        if attempt or exc.status is not None or isinstance(exc.__cause__,HTTPError) or isinstance(exc,GitHubRateLimitError) or not isinstance(exc.__cause__,(URLError,TimeoutError,ConnectionError,HTTPException)):raise
+            try:return repo,official(self.client.star_history_weeks,repo.full_name),False
+            except GitHubRequestError as exc:
+                if exc.status!=404 or not hasattr(self.client,'get_repository_by_id'):raise
+                # A stale same-day name must not poison every future refresh.
+                # Only a separate stable-ID 404 establishes current unavailability;
+                # a missing statistics endpoint alone never means zero growth.
+                try:current=official(self.client.get_repository_by_id,repo.id)
+                except GitHubRequestError as identity_error:
+                    if identity_error.status==404:return repo,None,True
+                    raise
+                if current.id!=repo.id:raise GitHubRequestError('官方仓库身份不一致')
+                if current.archived or current.stars<scope.min_stars:return current,None,True
+                return current,official(self.client.star_history_weeks,current.full_name),False
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='star-history') as pool:
             exhausted=False
             while not exhausted:
                 tick(stage='measuring');batch=[]
-                width=workers if budget.can_spend('core',workers,self.clock()) else 1
+                current_workers=min(workers,getattr(self.client,'request_concurrency',workers))
+                width=current_workers if budget.can_spend('core',current_workers,self.clock()) else 1
                 for _ in range(width):
                     try:row=next(rows)
                     except StopIteration:exhausted=True;break
@@ -370,7 +393,15 @@ class SearchCoordinator:
                     batch.append((row,repo,pool.submit(fetch,repo)))
                 for row,repo,future in batch:
                     try:
-                        weeks=future.result()
+                        current,weeks,unavailable=future.result()
+                        if unavailable:
+                            if current==repo:self.search.mark_unavailable(repo.id,scope.local_date)
+                            else:self.search.save_candidates(scope,(ObservedRepository(current,self.now().isoformat()),),())
+                            total-=1;tick(pending=max(0,total-checked),notes=('仓库当前不可访问或已不符合条件，今日排除；历史保留，后续更新重新检查',))
+                            continue
+                        if current!=repo:
+                            self.search.save_candidates(scope,(ObservedRepository(current,self.now().isoformat()),),())
+                            row=dict(row,payload=json.dumps(asdict(current)),observed_at=self.now().isoformat());repo=current
                         day=next((d for d in confirmed_star_days(weeks,self.now()) if d.stat_date==scope.stat_date),None)
                         if day is None:
                             tick(limited=True,notes=('官方统计日或UTC边界无法验证，未当作零日增',))
@@ -379,6 +410,7 @@ class SearchCoordinator:
                         self.store.mark_catalog_scored(repo.id,self.now().isoformat())
                         if day and day.added>0:measured.append((row,day,repo.stars))
                     except (GitHubRequestError,ValueError,OSError) as exc:
+                        if isinstance(exc,GitHubRateLimitError):exhausted=True
                         tick(limited=True,notes=(str(exc)[:300],))
                 yield None,None
         measured.sort(key=lambda item:(-item[1].added,-item[2],item[0]['repo_id']))

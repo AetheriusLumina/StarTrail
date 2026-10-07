@@ -117,3 +117,54 @@ class PoolBoundTests(unittest.TestCase):
     self.assertEqual([t.result() for t in tasks],[b'{}']*5)
    self.assertEqual(state['peak'],4)
   finally:release.set();pool.close()
+
+class ConfigurableConcurrencyTests(unittest.TestCase):
+ def test_client_passes_requested_connection_limit_to_official_pool(self):
+  with patch('github_radar.github_client.getproxies',return_value={}), patch('github_radar.github_transport.PooledHTTPSOpener') as pool:
+   client=GitHubClient(request_concurrency=100)
+   self.assertEqual(client.request_concurrency,100)
+   pool.assert_called_once_with(max_connections=100)
+   client.close()
+ def test_reject_invalid_or_over_limit_concurrency(self):
+  from github_radar.github_transport import PooledHTTPSOpener
+  for value in (0,101,True,1.5):
+   with self.subTest(value=value), self.assertRaises(ValueError):PooledHTTPSOpener(max_connections=value)
+   with self.subTest(client=value), self.assertRaises(ValueError):GitHubClient(request_concurrency=value)
+ def test_pool_has_one_shared_hundred_request_bound(self):
+  from github_radar.github_transport import PooledHTTPSOpener
+  pool=PooledHTTPSOpener(max_connections=100)
+  try:
+   for _ in range(100):self.assertTrue(pool.slots.acquire(blocking=False))
+   self.assertFalse(pool.slots.acquire(blocking=False))
+   for _ in range(100):pool.slots.release()
+  finally:pool.close()
+
+class RateDowngradeTests(unittest.TestCase):
+ def test_secondary_limit_preserves_status_retry_time_and_halves_concurrency(self):
+  from github_radar.github_client import GitHubRateLimitError
+  def opener(request,timeout):raise HTTPError(request.full_url,403,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO(b'{"message":"secondary rate limit"}'))
+  client=GitHubClient(opener=opener,request_concurrency=100)
+  with patch('github_radar.github_client.time.time',return_value=1000), self.assertRaises(GitHubRateLimitError) as caught:client.get_repository('a/b')
+  self.assertEqual(caught.exception.status,403);self.assertEqual(caught.exception.reset_at,1060)
+  self.assertEqual(client.request_concurrency,50)
+ def test_permission_403_does_not_reduce_concurrency(self):
+  def opener(request,timeout):raise HTTPError(request.full_url,403,'forbidden',{'x-ratelimit-remaining':'4999'},io.BytesIO(b'{"message":"Resource not accessible by integration"}'))
+  client=GitHubClient(opener=opener,request_concurrency=100)
+  with self.assertRaises(GitHubRequestError) as caught:client.get_repository('a/b')
+  self.assertEqual(caught.exception.status,403);self.assertEqual(client.request_concurrency,100)
+
+class SharedRateCooldownTests(unittest.TestCase):
+ def test_other_official_requests_wait_for_shared_retry_after(self):
+  from github_radar.github_client import GitHubRateLimitError
+  calls=[]
+  def opener(request,timeout):
+   calls.append(request.full_url)
+   if len(calls)==1:raise HTTPError(request.full_url,429,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO())
+   return FakeResponse(REPO_PAYLOAD)
+  client=GitHubClient(opener=opener,request_concurrency=100)
+  with patch('github_radar.github_client.time.time',return_value=1000):
+   with self.assertRaises(GitHubRateLimitError):client.get_repository('a/b')
+   with self.assertRaises(GitHubRateLimitError):client.get_repository('c/d')
+   self.assertEqual(len(calls),1)
+  with patch('github_radar.github_client.time.time',return_value=1061):self.assertEqual(client.get_repository('c/d').id,7)
+  self.assertEqual(len(calls),2)

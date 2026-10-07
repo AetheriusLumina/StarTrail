@@ -26,19 +26,22 @@ class GitHubRequestError(Exception):
 
 
 class GitHubRateLimitError(GitHubRequestError):
-    def __init__(self, reset_at: int | None):
+    def __init__(self, reset_at: int | None, *, status=None, path=None):
         self.reset_at = reset_at
-        super().__init__("GitHub 请求额度已用完，请稍后再试")
+        super().__init__("GitHub 请求达到限流，请等待额度恢复后再试",status=status,path=path)
 
 
 class GitHubClient:
     BASE_URL = "https://api.github.com"
 
-    def __init__(self, opener=urlopen, budget=None, clock=time.monotonic, token_provider=None, on_auth_failure=None):
+    def __init__(self, opener=urlopen, budget=None, clock=time.monotonic, token_provider=None, on_auth_failure=None, *, request_concurrency=4):
+        if type(request_concurrency) is not int or not 1<=request_concurrency<=100:raise ValueError("GitHub concurrency must be between 1 and 100")
+        self.request_concurrency=request_concurrency
+        self.retry_not_before=0
         self._transport=None
         if opener is urlopen and not any(getproxies().get(k) for k in ('https','all')):
             from .github_transport import PooledHTTPSOpener
-            self._transport=PooledHTTPSOpener();self._opener=self._transport
+            self._transport=PooledHTTPSOpener(max_connections=request_concurrency);self._opener=self._transport
         else:self._opener=build_opener(SameOriginRedirect()).open if opener is urlopen else opener
         self.graphql_remaining=None;self.graphql_reset_at=None
         self.remaining: int | None = None
@@ -56,10 +59,28 @@ class GitHubClient:
         self.token_provider = token_provider
         self.on_auth_failure=on_auth_failure
 
+    def _rate_error(self,exc,remaining,reset_at,path):
+        headers={str(k).lower():str(v) for k,v in (exc.headers or {}).items()}
+        retry=headers.get('retry-after','')
+        secondary=exc.code==403 and bool(retry)
+        if exc.code==403 and remaining!=0 and not secondary:
+            try:secondary='rate limit' in exc.read(65537).decode('utf-8',errors='replace').casefold()
+            except (OSError,ValueError):pass
+        if exc.code!=429 and not (exc.code==403 and (remaining==0 or secondary)):return None
+        # The shared pool stays bounded; subsequent waves and refreshes use fewer
+        # workers. No retry is sent before the server's recovery time.
+        with self._quota_lock:self.request_concurrency=max(1,self.request_concurrency//2)
+        reset_at=int(time.time())+int(retry) if retry.isdecimal() else reset_at if remaining==0 else int(time.time())+60
+        reset_at=reset_at or int(time.time())+60
+        with self._quota_lock:self.retry_not_before=max(self.retry_not_before,reset_at)
+        return GitHubRateLimitError(reset_at,status=exc.code,path=path)
+
     def close(self):
         if self._transport:self._transport.close()
 
     def _open_authenticated(self,request,timeout):
+        with self._quota_lock:
+            if time.time()<self.retry_not_before:raise GitHubRateLimitError(self.retry_not_before,path=request.full_url)
         try:return self._opener(request,timeout=timeout)
         except HTTPError as exc:
             authorization=request.get_header('Authorization')
@@ -195,7 +216,8 @@ class GitHubClient:
             return result
         except HTTPError as exc:
             self._capture_limit(exc.headers,'/graphql',request._radar_auth_epoch)
-            if exc.code in (403,429):raise GitHubRateLimitError(self.graphql_reset_at) from exc
+            limited=self._rate_error(exc,self.graphql_remaining,self.graphql_reset_at,'/graphql')
+            if limited:raise limited from exc
             raise GitHubRequestError(f'GitHub批量请求失败（HTTP {exc.code}）',status=exc.code,path='/graphql') from exc
         except (URLError,socket.timeout,TimeoutError,OSError,HTTPException,SourceRequestError) as exc:raise GitHubRequestError('连接GitHub批量接口失败，请检查网络') from exc
         except (ValueError,KeyError,TypeError) as exc:raise GitHubRequestError('GitHub批量元数据格式无效') from exc
@@ -272,8 +294,8 @@ class GitHubClient:
             self._capture_limit(exc.headers, path)
             if exc.code == 304: return ReadmeFetch(None, etag, True, False)
             if exc.code == 404: return ReadmeFetch(None, None, False, False)
-            if exc.code == 429 or (exc.code == 403 and self.core_remaining == 0):
-                raise GitHubRateLimitError(self.core_reset_at) from exc
+            limited=self._rate_error(exc,self.core_remaining,self.core_reset_at,request.full_url)
+            if limited:raise limited from exc
             raise GitHubRequestError(f'GitHub README 请求失败（HTTP {exc.code}）') from exc
         except UnicodeDecodeError as exc:
             raise GitHubRequestError('README 不是有效的 UTF-8 文本。') from exc
@@ -305,8 +327,8 @@ class GitHubClient:
             self._capture_limit(exc.headers, path)
             if exc.code == 404:
                 return None
-            if exc.code == 429 or (exc.code == 403 and self.remaining == 0):
-                raise GitHubRateLimitError(self.reset_at) from exc
+            limited=self._rate_error(exc,self.remaining,self.reset_at,path)
+            if limited:raise limited from exc
             raise GitHubRequestError(f"GitHub README 请求失败（HTTP {exc.code}）") from exc
         except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
             raise GitHubRequestError("连接 GitHub 失败，请检查网络") from exc
@@ -388,8 +410,8 @@ class GitHubClient:
                 return payload
         except HTTPError as exc:
             self._capture_limit(exc.headers, path, request._radar_auth_epoch)
-            if exc.code == 429 or (exc.code == 403 and self.remaining == 0):
-                raise GitHubRateLimitError(self.reset_at) from exc
+            limited=self._rate_error(exc,self.remaining,self.reset_at,path)
+            if limited:raise limited from exc
             raise GitHubRequestError(f"GitHub 请求失败（HTTP {exc.code}）",status=exc.code,path=path) from exc
         except (URLError, socket.timeout, TimeoutError, OSError, HTTPException, SourceRequestError) as exc:
             raise GitHubRequestError("连接 GitHub 失败，请检查网络") from exc

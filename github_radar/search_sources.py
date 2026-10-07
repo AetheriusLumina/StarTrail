@@ -42,12 +42,12 @@ class SearchSources:
     def _save_cursor(self,scope,term,queue):
         with closing(self.store._connect()) as db,db:
             db.execute('INSERT INTO search_cursors VALUES(?,?,?) ON CONFLICT(scope_key,source) DO UPDATE SET payload=excluded.payload',
-                (scope_key(scope),'github:'+term,json.dumps({'date':scope.local_date,'queue':queue})))
+                (scope_key(scope),'github:'+term+(':name-topics-v1' if getattr(self,'strict_keyword',False) else ''),json.dumps({'date':scope.local_date,'queue':queue})))
 
     def _queue(self,scope,term,start,end):
         with closing(self.store._connect()) as db:
             row=db.execute('SELECT payload FROM search_cursors WHERE scope_key=? AND source=?',
-                (scope_key(scope),'github:'+term)).fetchone()
+                (scope_key(scope),'github:'+term+(':name-topics-v1' if getattr(self,'strict_keyword',False) else ''))).fetchone()
         saved=json.loads(row[0]) if row else None
         fresh=[{'start':start.isoformat(),'end':end.isoformat(),'low':scope.min_stars,'high':None,'page':1}]
         if not saved:return fresh
@@ -72,7 +72,8 @@ class SearchSources:
         queue=self._queue(scope,cursor_term,start,end)
         while queue and not cancel_event.is_set() and budget.can_spend('search',1,self.clock()):
             item=queue[0];stars=f"stars:>={item['low']}" if item['high'] is None else f"stars:{item['low']}..{item['high']}"
-            base=literal_term(term)+' in:name,description,readme' if term else ''
+            strict=getattr(self,'strict_keyword',False)
+            base=literal_term(term)+(' in:name,topics' if strict else ' in:name,description,readme') if term else ''
             query=f"{base} archived:false {stars} created:{item['start']}..{item['end']}"
             try:page=self._call(budget,'search',self.client.search_page,query,page=item['page'],per_page=100,sort='stars')
             except (GitHubRequestError,ValueError,OSError) as exc:
@@ -80,7 +81,7 @@ class SearchSources:
             observed=datetime.now().astimezone().isoformat()
             self.search.save_candidates(scope,tuple(ObservedRepository(r,observed) for r in page.items),())
             if scope.section=='keyword':
-                for repo in page.items:self.search.save_match(scope,repo,term,'github_query',observed)
+                for repo in page.items:self.search.save_match(scope,repo,term,'github_name_topic' if strict else 'github_query',observed)
             for repo in page.items:self.search.mark_available(repo.id)
             self.collected+=len(page.items);on_progress('collecting',self.collected)
             first,last=date.fromisoformat(item['start']),date.fromisoformat(item['end'])

@@ -1,4 +1,4 @@
-"""At most four reusable HTTPS connections, restricted to the official API."""
+"""Bounded reusable HTTPS connections, restricted to the official API."""
 import io,queue,threading,time
 from http.client import HTTPSConnection
 from urllib.error import HTTPError
@@ -17,8 +17,9 @@ class _Response:
         self.response.close();self.pool.release(self.connection,reusable)
 
 class PooledHTTPSOpener:
-    def __init__(self,*,factory=HTTPSConnection):
-        self.factory=factory;self.idle=queue.LifoQueue(4);self.slots=threading.BoundedSemaphore(4);self.closed=False;self.lock=threading.Lock()
+    def __init__(self,*,factory=HTTPSConnection,max_connections=4):
+        if type(max_connections) is not int or not 1<=max_connections<=100:raise ValueError("GitHub concurrency must be between 1 and 100")
+        self.factory=factory;self.idle=queue.LifoQueue(max_connections);self.slots=threading.BoundedSemaphore(max_connections);self.closed=False;self.lock=threading.Lock()
     def release(self,connection,reusable):
         with self.lock:
             if reusable and not self.closed:self.idle.put_nowait(connection)
@@ -56,9 +57,9 @@ class PooledHTTPSOpener:
                 wrapped=_Response(self,connection,response);leased=False
                 if response.status>=400 or response.status==304:
                     status,reason,headers=response.status,response.reason,response.headers
-                    try:wrapped.read(65537)
+                    try:error_body=wrapped.read(65537)
                     finally:wrapped.close()
-                    raise HTTPError(url,status,reason,headers,io.BytesIO())
+                    raise HTTPError(url,status,reason,headers,io.BytesIO(error_body))
                 return wrapped
             raise SourceRequestError('GitHub重定向次数过多')
         except BaseException:

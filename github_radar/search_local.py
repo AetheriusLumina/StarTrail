@@ -81,6 +81,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         # Fixed public sources are fetched directly. AI only expands keywords;
         # neither board repeats a paid web search or audits repository facts.
         result=None
+        e.sources.strict_keyword=True
         e.sources.daily_discovery=not prepare_only
         tick(stage='collecting')
         if hasattr(e.sources,'collect_steps'):
@@ -95,7 +96,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
                 for _ in e._frontier(scope,budget,tick,event):yield p
             p=replace(p,status='paused' if p.limited or e.sources.limited else 'prepared',stage='stopped' if p.limited or e.sources.limited else 'prepared',notes=tuple(dict.fromkeys((*p.notes,*e.sources.notes))),**metrics())
             e.search.save_progress(p,lease=lease);return p
-        terms=tuple(dict.fromkeys((scope.term,*(expansion.terms if expansion else ()))))
+        terms=tuple(dict.fromkeys((scope.term,*(expansion.terms if expansion else ()),*(expansion.topics if expansion else ()))))
         prepared=[];verdicts={};daily={};pending=0
         for row,day in e._frontier(scope,budget,tick,event):
             if row is None:yield p;continue
@@ -111,7 +112,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
             item=PreparedCandidate(observation,AIRepositoryInput(repo,None,True,observed_at=observation.observed_at),(),fingerprint,'',day)
             prepared.append(item)
             if scope.section=='keyword':
-                verdicts[repo.id]=e.search.matching_verdict(scope,observation,terms)
+                verdicts[repo.id]=e.search.matching_verdict(scope,observation,terms,strict=True)
             else:daily[repo.id]=day
             if len(prepared)%20==0:yield p
         if scope.section=='keyword':e.search.save_judgments(scope,prepared,tuple(verdicts.values()),(),e.now().isoformat())
