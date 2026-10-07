@@ -35,9 +35,9 @@ class MetadataTests(unittest.TestCase):
         start=time.perf_counter();source.collect(scope,None,result,budget,cancel,updated)
         rows=SearchStore(store).candidate_page(scope,None,100)
         return peak,calls,[(r.repo.id,r.repo.stars) for r in rows],progress,time.perf_counter()-start,budget
-    def test_two_inflight_bounded_and_same_order_results_as_serial(self):
+    def test_four_inflight_bounded_and_same_order_results_as_serial(self):
         concurrent=self.run_collection();serial=self.run_collection(workers=1)
-        self.assertEqual(concurrent[0],2);self.assertEqual(serial[0],1)
+        self.assertEqual(concurrent[0],4);self.assertEqual(serial[0],1)
         self.assertEqual(concurrent[2:4],serial[2:4]);self.assertEqual(len(concurrent[1]),6)
         self.assertEqual(len(set(concurrent[1])),6)
     def test_unknown_quota_starts_with_one_probe(self):
@@ -48,7 +48,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(len(result[1]),2);self.assertEqual(result[-1].core_remaining,10)
     def test_cancel_does_not_enqueue_remaining_candidates(self):
         result=self.run_collection(count=12,cancel_after=1)
-        self.assertLessEqual(len(result[1]),2)
+        self.assertEqual(len(result[1]),4)
     def test_out_of_order_headers_do_not_increase_available_quota(self):
         budget=RequestBudget(20,2,100,10)
         budget.spend('core',1,0);budget.observe({'X-RateLimit-Resource':'core','X-RateLimit-Remaining':'15'})

@@ -55,12 +55,13 @@ from .public_http import SourceRequestError
 
 class SearchCoordinator:
     """One module task: network outside transactions, lease checked at publication."""
-    def __init__(self,store,client,provider,*,sources=None,now=None,clock=time.monotonic):
+    def __init__(self,store,client,provider,*,sources=None,now=None,clock=time.monotonic,legacy_review=False):
         self.store,self.client,self.provider=store,client,provider
         self.now=now or (lambda:datetime.now().astimezone());self.clock=clock
         self.search=SearchStore(store)
         self.sources=sources or SearchSources(client,store,None,None,clock)
         self.owner=uuid.uuid4().hex
+        self.legacy_review=legacy_review
 
     def _readme(self,observation,scope,budget):
         # A small disk excerpt avoids repeated downloads and keeps the candidate
@@ -109,20 +110,40 @@ class SearchCoordinator:
                     for resource in ('core','search'):
                         remaining=getattr(self.client,resource+'_remaining',None)
                         known=getattr(self._active_budget,resource+'_remaining')
-                        if remaining is not None and known is not None:setattr(self._active_budget,resource+'_remaining',min(remaining,known))
+                        if remaining is not None:setattr(self._active_budget,resource+'_remaining',remaining if known is None else min(remaining,known))
+            if getattr(self,'_timing',None):self._timing.resume()
             try:value=next(iterator)
             except StopIteration as done:return done.value
             finally:
+                if getattr(self,'_timing',None):self._timing.pause()
                 if hasattr(self.client,'budget'):self.client.budget=previous_budget;self.client.clock=previous_clock
             yield value
 
-    def _run_steps(self,scope,*,max_new=200,continue_search=False,cancel_event=None,on_progress=None):
+    def _run_steps(self,scope,*,max_new=200,continue_search=False,cancel_event=None,on_progress=None,defer_publish=False,prepare_only=False,budget_seconds=1800):
+        if not self.legacy_review:
+            from .search_local import local_steps
+            return (yield from local_steps(self,scope,continue_search=continue_search,cancel_event=cancel_event,on_progress=on_progress,defer_publish=defer_publish,prepare_only=prepare_only,budget_seconds=budget_seconds))
         if type(max_new) is not int or not 1<=max_new<=200:raise ValueError('核实上限必须在1到200之间')
         catalog_mode=scope.section=='keyword' and hasattr(self.provider,'filter_catalog')
         event=cancel_event or threading.Event();started=self.clock();deadline=started+1800
         lease=self.search.claim_run(scope,self.owner,now=self.now().timestamp())
         if not lease.acquired:return self.search.progress(lease.job_id)
-        progress=replace(self.search.progress(lease.job_id),status='running',stage='expanding',notes=())
+        from .search_timing import SearchTiming
+        self._timing=SearchTiming(self.clock);self._timing.resume();self._ai_seconds=0
+        progress=replace(self.search.progress(lease.job_id),status='running',stage='expanding',notes=(),started_at=self.now().isoformat())
+        def metrics():
+            return dict(elapsed_seconds=round(max(0,self.clock()-started),3),
+                        ai_seconds=round(self._ai_seconds,3),stage_seconds=self._timing.snapshot())
+        def ai_call(call,*args,**kwargs):
+            nonlocal progress
+            at=self.clock()
+            progress=replace(progress,ai_started_at=self.now().isoformat())
+            self.search.save_progress(progress,lease=lease)
+            if on_progress:on_progress(progress)
+            try:return call(*args,**kwargs)
+            finally:
+                self._ai_seconds+=max(0,self.clock()-at)
+                progress=replace(progress,ai_started_at='')
         cap=progress.newly_checked+max_new if continue_search else max_new
         last_tick=started
         def tick(**changes):
@@ -131,6 +152,8 @@ class SearchCoordinator:
             if self.clock()>=deadline:raise AIOutputError('检索时间预算已到，结果及断点保留')
             if all(getattr(progress,key)==value for key,value in changes.items()) and self.clock()-last_tick<1:return
             last_tick=self.clock()
+            self._timing.switch(changes.get('stage',progress.stage))
+            changes.update(metrics())
             if not self.search.renew_run(lease,now=self.now().timestamp(),ttl=max(1,deadline-self.clock())):
                 raise AIOutputError('任务已被其他更新替代')
             progress=replace(progress,**changes);self.search.save_progress(progress,lease=lease)
@@ -155,7 +178,7 @@ class SearchCoordinator:
                             tick(limited=True,notes=('Trendshift 主题目录: '+str(exc)[:200],))
                     tick(expansion_calls=progress.expansion_calls+1)
                     try:
-                        expansion=self.provider.expand_keyword(scope.term,scope.model_id,topics,timeout=timeout())
+                        expansion=ai_call(self.provider.expand_keyword,scope.term,scope.model_id,topics,timeout=timeout())
                         self.search.save_expansion(scope,expansion)
                     except AIOutputError as exc:
                         if event.is_set():raise
@@ -176,7 +199,7 @@ class SearchCoordinator:
             elif progress.search_calls<2:
                 tick(stage='searching',search_calls=progress.search_calls+1)
                 try:
-                    result=self.provider.search_repositories(scope,expansion,(),None,timeout=timeout(),cancel_event=event)
+                    result=ai_call(self.provider.search_repositories,scope,expansion,(),None,timeout=timeout(),cancel_event=event)
                     self.search.save_cursor(scope,'ai-search',{'date':scope.local_date,**asdict(result)})
                 except AIOutputError as exc:
                     if event.is_set():raise
@@ -245,11 +268,11 @@ class SearchCoordinator:
                     if pending:
                         if catalog_mode:
                             tick(stage='checking',catalog_calls=progress.catalog_calls+1,newly_checked=progress.newly_checked+len(pending),judgment_calls=progress.judgment_calls+1)
-                            results=self.provider.filter_catalog(tuple(p.source for p in prepared),scope.term,expansion.terms if expansion else (),scope.model_id,timeout=max(.01,min(600,deadline-self.clock())))
+                            results=ai_call(self.provider.filter_catalog,tuple(p.source for p in prepared),scope.term,expansion.terms if expansion else (),scope.model_id,timeout=max(.01,min(600,deadline-self.clock())))
                             verdicts.update((r.repo_id,r) for r in results)
                             self.search.save_judgments(scope,prepared,results,(),self.now().isoformat())
                             tick(checked_completed=progress.checked_completed+len(pending))
-                        else:self._judge(scope,pending,verdicts,assessments,progress,tick,timeout)
+                        else:ai_call(self._judge,scope,pending,verdicts,assessments,progress,tick,timeout)
                         progress=self.search.progress(lease.job_id)
                     yield progress
                 finally:
@@ -266,7 +289,7 @@ class SearchCoordinator:
                 tick(stage='searching',search_calls=progress.search_calls+1)
                 known=tuple(p.observation.repo.full_name for p in prepared)[:200]
                 try:
-                    gap=self.provider.search_repositories(scope,expansion,known,
+                    gap=ai_call(self.provider.search_repositories,scope,expansion,known,
                         'Too few eligible new results after deduplication and relevance checks; search other public lists and synonyms.',
                         timeout=timeout(),cancel_event=event)
                 except AIOutputError as exc:
@@ -294,25 +317,33 @@ class SearchCoordinator:
             self.search.publish(Publication(scope,lease.generation,observations,snapshots,picks,coverage),lease,now=self.now(),cancel_event=event)
             # Cancellation after a committed publication does not undo the commit
             # or falsely report that no results were saved.
-            progress=replace(progress,status='partial' if progress.limited else 'done',stage='complete')
+            progress=replace(progress,status='partial' if progress.limited else 'done',stage='complete',**metrics())
             self.search.save_progress(progress,lease=lease)
             if on_progress:on_progress(progress)
         except GeneratorExit:
-            progress=replace(progress,status='canceled',stage='stopped',limited=True,notes=(*progress.notes,'检索已取消，断点保留'))
+            progress=replace(progress,status='canceled',stage='stopped',limited=True,notes=(*progress.notes,'检索已取消，断点保留'),**metrics())
             self.search.save_progress(progress,lease=lease)
             raise
         except Exception as exc:
             progress=replace(progress,status='canceled' if event.is_set() else 'paused',stage='stopped',limited=True,
-                notes=tuple(dict.fromkeys((*progress.notes,str(exc)[:300]))))
+                notes=tuple(dict.fromkeys((*progress.notes,str(exc)[:300]))),**metrics())
             self.search.save_progress(progress,lease=lease)
-        finally:self.search.finish_run(lease)
+        finally:
+            import logging
+            logging.getLogger(__name__).info('search timing %s',json.dumps({
+                'section':scope.section,'keyword_id':scope.keyword_id,'status':progress.status,
+                'candidate_pool':progress.candidate_pool,'official_checked':progress.official_checked,
+                **metrics()},ensure_ascii=False))
+            self.search.finish_run(lease)
         return progress
 
     def _frontier(self,scope,budget,tick,event):
         if scope.section=='keyword':
             for row in self.search.frontier(scope):yield row,None
             return
-        measured=[];rows=iter(self.search.frontier(scope));workers=2 if isinstance(self.client,GitHubClient) else 1
+        total=sum(1 for row in self.search.frontier(scope) if not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars)
+        tick(pending=total)
+        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope));workers=(2 if self.legacy_review else 4) if isinstance(self.client,GitHubClient) else 1
         def fetch(repo):
             if getattr(self.client,'budget',None) is not budget:budget.spend('core',1,self.clock())
             return self.client.star_history_weeks(repo.full_name)
@@ -327,6 +358,11 @@ class SearchCoordinator:
                     from .search_storage import _repository
                     repo=_repository(json.loads(row['payload']))
                     if repo.archived or repo.stars<scope.min_stars:continue
+                    cached_day=self.search.load_star_day(repo.id,scope.stat_date,self.now())
+                    if cached_day is not None:
+                        checked+=1;cached_count+=1;tick(official_checked=checked,cache_hits=cached_count,pending=max(0,total-checked))
+                        if cached_day.added>0:measured.append((row,cached_day,repo.stars))
+                        continue
                     cached=getattr(self.client,'has_cached_star_history',lambda name:False)(repo.full_name)
                     if not cached and not budget.can_spend('core',1,self.clock()):
                         tick(limited=True,notes=('官方日增核算达到请求预算，未核算候选保留断点',))
@@ -336,6 +372,10 @@ class SearchCoordinator:
                     try:
                         weeks=future.result()
                         day=next((d for d in confirmed_star_days(weeks,self.now()) if d.stat_date==scope.stat_date),None)
+                        if day is None:
+                            tick(limited=True,notes=('官方统计日或UTC边界无法验证，未当作零日增',))
+                        else:
+                            self.search.save_star_day(repo.id,day,self.now());checked+=1;tick(official_checked=checked,pending=max(0,total-checked))
                         self.store.mark_catalog_scored(repo.id,self.now().isoformat())
                         if day and day.added>0:measured.append((row,day,repo.stars))
                     except (GitHubRequestError,ValueError,OSError) as exc:

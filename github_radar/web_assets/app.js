@@ -305,7 +305,7 @@ function cardNode(card,{compact=false}={}) {
     link.append(element("span", "card-keyword-match", `${tr("基础匹配")}${language === "en" ? ": " : "："}${shown}${rest}`));
   }
   if (!compact && card.ai_status) {
-    const labels = {basic: "基础匹配", relevant: "AI 已核实", uncertain: "证据不足", irrelevant: "AI 判为不相关"};
+    const labels = {basic: "基础匹配", search_matched: "检索匹配", ai_discovered: "AI 搜索发现", relevant: "AI 已核实", uncertain: "证据不足", irrelevant: "AI 判为不相关"};
     link.append(element("span", `ai-card-label ${card.ai_status}`,
       tr(labels[card.ai_status] || "基础匹配")));
   }
@@ -439,6 +439,12 @@ function renderKeywordGroups(issue) {
       : group.ai_status === "done" ? (language === "en" ? `Review complete. ${group.checked_count || 0} candidates checked.` : `本组分析完成。已检查 ${group.checked_count || 0} 个候选。`)
       : verifiedFull ? tr("本组五个项目均已核实。")
       : group.checked_count ? tr("可手动核实下一批候选，补齐符合条件的新项目。") : (language==='en'?'Basic matches; automatic AI discovery runs during data updates when enabled and connected.':'当前为基础匹配；开启自动 AI 发现且已连接时，数据更新会自动核实。');
+    if(group.discovery_mode){
+      count.textContent=language==='en'?`${(group.cards||[]).length} / 5 projects · ${group.matched_count||0} query matches`:`${(group.cards||[]).length} / 5 个项目 · 匹配 ${group.matched_count||0} 个候选`;
+      button.hidden=false;button.textContent=tr('继续检索');
+      button.disabled=!aiConnection.ready||issue.busy||issue.ai_busy||quitting;
+      status.textContent=language==='en'?'Original and expanded query matches are sorted by official total Stars. AI only expands keywords. Continuing advances direct public-source discovery.':'按原词及扩展词的检索依据匹配，符合条件的项目按官方总 Star 排序；AI 只辅助扩词。继续检索会推进公开来源的分页与断点。';
+    }
     if (["running", "done", "error"].includes(group.ai_status)) {
       const announcement = language === "en" ? `Keyword “${group.term}”: ${status.textContent}` : `关键词「${group.term}」：${status.textContent}`;
       if (announcement !== lastAiAnnouncement) {
@@ -656,15 +662,32 @@ function renderIssue(issue) {
   for (const group of issue.keyword_groups || [])
     if (group.cards.length < 5) shortage.push(language === "en"
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
-  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
-  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
-  byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>p.status==='running');
+  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',matching:'匹配检索依据',prepared:'等待整份保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',matching:'Matching queries',prepared:'Waiting for atomic save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>(p.status==='running'||p.status==='ready'));
   if(byId('search-cancel').hidden)byId('search-cancel').disabled=false;
+  const timingText=p=>{
+    const elapsed=p.status==='running'&&p.started_at?Math.max(Number(p.elapsed_seconds)||0,(Date.now()-Date.parse(p.started_at))/1000):Number(p.elapsed_seconds)||0;
+    const seconds=value=>`${Math.max(0,Math.round(value||0))}s`;
+    const activeAI=p.status==='running'&&p.ai_started_at?(Date.now()-Date.parse(p.ai_started_at))/1000:0;
+    const ai=(Number(p.ai_seconds)||0)+(Number.isFinite(activeAI)?Math.max(0,activeAI):0);
+    const phases=p.stage_seconds||{};
+    const slowest=Object.keys(phases).sort((a,b)=>phases[b]-phases[a])[0];
+    return language==='en'?`elapsed ${seconds(elapsed)}, AI ${seconds(ai)}${slowest?`, ${stageEn[slowest]||slowest} ${seconds(phases[slowest])}`:''}`:
+      `已用时 ${seconds(elapsed)}，AI ${seconds(ai)}${slowest?`，${stages[slowest]||slowest} ${seconds(phases[slowest])}`:''}`;
+  };
+  const analysisText=p=>p.section==='keyword'&&p.search_mode==='discovery'?(language==='en'?`query matches ${p.matched_count||0}; no AI audit`:`检索匹配 ${p.matched_count||0}；无 AI 审核`):p.section==='growth'?(language==='en'?`officially measured ${p.official_checked||0}`:`官方已核算 ${p.official_checked||0}`):
+    (language==='en'?`AI submitted ${p.newly_checked}, completed ${p.checked_completed||0}`:`AI 已提交 ${p.newly_checked}，已完成 ${p.checked_completed||0}`);
   const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').sort((a,b)=>Number(b.status==='running')-Number(a.status==='running')).map(p=>
-    language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · read ${p.collected}, candidate library ${p.candidate_pool||p.unique||0}, submitted ${p.newly_checked}, completed ${p.checked_completed||0}, cache ${p.cache_hits}, pending ${p.pending}`:
-    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 读取 ${p.collected}，候选库 ${p.candidate_pool||p.unique||0}，AI 已提交 ${p.newly_checked}，已完成 ${p.checked_completed||0}，缓存 ${p.cache_hits}，待处理 ${p.pending}`);
+    language==='en'?`${p.section}: ${stageEn[p.stage]||p.stage} · read ${p.collected}, candidate library ${p.candidate_pool||p.unique||0}, ${analysisText(p)}, cache ${p.cache_hits}, pending ${p.pending} · ${timingText(p)}`:
+    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${stages[p.stage]||p.stage} · 读取 ${p.collected}，候选库 ${p.candidate_pool||p.unique||0}，${analysisText(p)}，缓存 ${p.cache_hits}，待处理 ${p.pending} · ${timingText(p)}`);
   if(issue.busy&&progress.length)setStatus(progress.join(" · "), "busy");
-  byId("issue-notes").textContent = [...new Set([...progress,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
+  const total=issue.refresh_timing;
+  const summary=!issue.busy&&total?(language==='en'?`Last complete attempt: ${total.elapsed_seconds}s wall clock, ${total.ai_seconds}s cumulative AI calls (may overlap).`:`上次整次尝试：总用时 ${total.elapsed_seconds} 秒，AI 累计 ${total.ai_seconds} 秒（并行可重叠）。`):'';
+  const coverageNotes=(issue.search_progress||[]).flatMap(p=>Object.entries(p.source_status||{}).filter(([,value])=>value.status!=='complete').map(([source,value])=>
+    language==='en'?`${source}: ${value.status==='partial'?'partial public coverage':'source unavailable'} (${value.count||0} repositories)`:
+    `${source}：${value.status==='partial'?'公开范围未覆盖完整':'来源暂不可用'}（${value.count||0} 个项目）`));
+  byId("issue-notes").textContent = [...new Set([...progress,...coverageNotes,summary,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
   if (pollTimer) clearTimeout(pollTimer);
   if (busy && !quitting) pollTimer = setTimeout(loadIssue, 1200);
   translatePage();

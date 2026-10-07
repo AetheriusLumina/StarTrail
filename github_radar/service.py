@@ -28,6 +28,9 @@ class RefreshResult:
     message: str
     notes: tuple[str, ...]
     growth_coverage: GrowthCoverage | None = None
+    elapsed_seconds: float = 0
+    ai_seconds: float = 0
+    stage_seconds: dict | None = None
 
 
 class RadarService:

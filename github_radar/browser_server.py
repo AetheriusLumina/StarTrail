@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
+import time
 import threading
 from dataclasses import asdict, replace
 from datetime import date, datetime
@@ -70,6 +71,9 @@ class BrowserServer:
         self.instance_id = secrets.token_hex(16)
         self._thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
+        self._prepare_worker: threading.Thread | None = None
+        self._prepared_at=0.0
+        self._prepare_cancel=threading.Event()
         self._ai_worker_thread: threading.Thread | None = None
         self.readme_service = ReadmeService(service.client, store)
         self.translation_service = TranslationService(store)
@@ -122,9 +126,36 @@ class BrowserServer:
         # local wall time and the durable daily attempt policy, never a new budget.
         while not self._schedule_stop.wait(self.AUTO_UPDATE_POLL_SECONDS):
             try:
-                self.start_due_update()
+                if not self.start_due_update():self._start_preparation()
             except (OSError, sqlite3.Error, ValueError):
                 record_error(self.store.data_dir, "auto-update", "恢复后检查每日更新失败，等待下一次检查")
+
+    def _start_preparation(self):
+        """Only while this local app is awake and idle; no AI allowance usage."""
+        jobs=getattr(self.service,'search_jobs',None)
+        if jobs is None or not hasattr(jobs,'prepare') or not isinstance(self.service.client,GitHubClient):return False
+        with self._lock:
+            if self._closed or self._quitting or self._login_pending or not self.store.load_search_enabled():return False
+            if any(t and t.is_alive() for t in (self._worker,self._prepare_worker,self._ai_worker_thread,self._readme_worker)):return False
+            if self.service.clock()-self._prepared_at<600:return False
+            if not self.service.client._authorization():return False
+            self._prepared_at=self.service.clock()
+            self._prepare_cancel=threading.Event()
+            event=self._prepare_cancel
+            def run():
+                try:jobs.prepare(cancel_event=event)
+                except (OSError,sqlite3.Error,ValueError):record_error(self.store.data_dir,'preparation','公开资料准备未完成，断点保留')
+            self._prepare_worker=threading.Thread(target=run,daemon=True,name='public-preparation');self._prepare_worker.start()
+        return True
+
+    def _stop_preparation(self):
+        worker=self._prepare_worker
+        if worker and worker.is_alive():
+            self._prepare_cancel.set()
+            self.service.search_jobs.cancel()
+            # No client/budget is shared with foreground work until the old
+            # generator unwinds. Network timeout bounds the waiting request.
+            worker.join()
 
     def start_due_update(self, now: datetime | None = None) -> bool:
         """Catch up today's due update on startup without blocking page display."""
@@ -160,6 +191,7 @@ class BrowserServer:
         self._closed = True
         self._schedule_stop.set()
         if self._schedule_thread is not None:self._schedule_thread.join(timeout=3)
+        self._stop_preparation()
         self.software_updater.close()
         if getattr(self.service, "search_jobs", None) is not None:self.service.search_jobs.cancel()
         self.readme_service.cancel()
@@ -802,6 +834,7 @@ class BrowserServer:
                     auto_selected: bool = False, context_date: str | None = None) -> None:
         checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
         try:
+            self._stop_preparation()
             search_jobs=getattr(self.service,'search_jobs',None)
             if kind=='refine' and search_jobs is not None:
                 search_jobs.continue_keyword(target,day,model_id=model_id)
@@ -838,6 +871,11 @@ class BrowserServer:
         self._worker.start()
 
     def _refresh_worker(self) -> None:
+        clock=getattr(self.service,'clock',time.monotonic)
+        preparing=bool(self._prepare_worker and self._prepare_worker.is_alive())
+        waiting=clock()
+        self._stop_preparation()
+        preparation_wait=clock()-waiting if preparing else 0
         observed_at = datetime.now().astimezone().isoformat(timespec="seconds")
         today = date.today().isoformat()
         try:
@@ -852,6 +890,14 @@ class BrowserServer:
         except Exception as exc:
             self.store.save_refresh_failure(observed_at, f"更新失败：{exc}")
             result = self.service.load_latest(today)
+        if preparation_wait:
+            result=replace(result,elapsed_seconds=result.elapsed_seconds+preparation_wait)
+            from .search_storage import SearchStore
+            timing=SearchStore(self.store).refresh_timing()
+            if timing:
+                timing["elapsed_seconds"]=result.elapsed_seconds
+                from contextlib import closing
+                with closing(self.store._connect()) as db,db:db.execute("UPDATE settings SET value=? WHERE name='search_refresh_timing'",(json.dumps(timing),))
         with self._lock:
             self._last_result = result
         if result.status in ('error', 'partial'):
@@ -869,6 +915,7 @@ class BrowserServer:
             record_error(self.store.data_dir, 'pretranslation', str(exc))
 
     def _scheduled_worker(self, now: datetime) -> None:
+        self._stop_preparation()
         run_scheduled_update(self.store, self.service, now)
         result = self.service.load_latest(now.date().isoformat())
         with self._lock:
@@ -877,6 +924,7 @@ class BrowserServer:
 
     def _fetch_readme(self, repo_id, refresh):
         try:
+            self._stop_preparation()
             view = self.readme_service.load(repo_id, refresh)
         except Exception:
             view = replace(self.readme_service.cached(repo_id), status='error',
@@ -908,6 +956,8 @@ class BrowserServer:
 
     def _software_ready(self, target, release):
         from .software_update import launch_installer
+        # Stop public preparation before the installer can back up the database.
+        self._stop_preparation()
         # A launch failure keeps the running reader and its data available.
         with self._lock:
             if self._quitting:raise ValueError('软件正在退出，请下次重新更新')
@@ -1123,6 +1173,9 @@ class BrowserServer:
                     verdict = verdicts.get(recommendation.keyword_id or 0, {}).get(repository.id)
                     card["ai_status"] = verdict.verdict if verdict else "basic"
                     card["ai_reason"] = verdict.reason if verdict else ""
+                    if verdict and verdict.verdict=='relevant':
+                        if verdict.reason.startswith('检索匹配：'):card['ai_status']='search_matched'
+                        elif verdict.reason.startswith('AI 搜索依据：'):card['ai_status']='ai_discovered'
                     keyword_cards.setdefault(recommendation.keyword_id or 0, []).append(card)
                 cards.append(card)
             sections.append({"id": section_id, "title": tr(language, title), "cards": cards})
@@ -1137,6 +1190,8 @@ class BrowserServer:
                 "cards": keyword_cards.get(rule.id, []),
                 "checked_count": current_search.checked_completed+current_search.cache_hits if current_search else progress.checked_count,
                 "search_progress": asdict(current_search) if current_search else None,
+                "discovery_mode": getattr(self.service,'search_jobs',None) is not None,
+                "matched_count": current_search.matched_count if current_search else 0,
                 "ai_status": group_job["status"] if group_job else
                              "checked" if progress.checked_count else "idle",
                 "ai_message": tr(language, group_job["message"]) if group_job else "",
@@ -1155,6 +1210,7 @@ class BrowserServer:
             "sections": sections,
             "keyword_groups": keyword_groups,
             "search_progress": [asdict(p) for p in search_progress],
+            "refresh_timing": search_store.refresh_timing(),
             "update_failure": ({"attempted_at": failure[0], "reason": tr(language, self._failure_with_account(failure[1]))}
                                if failure else None),
             "search_enabled": self.store.load_search_enabled(),

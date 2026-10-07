@@ -78,3 +78,19 @@ class TrendshiftTests(unittest.TestCase):
         self.assertEqual(len(client.topic("AI skills", "2026-09-30T10:00:00+00:00").candidates), 1)
         self.assertEqual(client.topic("unknown", "2026-09-30T10:00:00+00:00").candidates, ())
         self.assertEqual(requests, ['https://trendshift.io/topics', 'https://trendshift.io/topics/ai-skills'])
+
+
+class TopicPayloadTests(TrendshiftTests):
+ def test_topic_payload_excludes_sidebar_repository_links(self):
+  import json
+  rows=[{'full_name':'actual/skills','tags':[{'name':'AI skills'}]}]
+  payload=json.dumps([1,'x:'+json.dumps({'initialRepositories':rows,'initialNextCursor':'public-cursor'})])
+  html='<a href="/repositories/999">sidebar/unrelated</a><script>self.__next_f.push('+payload+')</script>'
+  result=self.module().parse_trendshift(html,'https://trendshift.io/topics/ai-skills','2026-10-07T00:00:00Z')
+  self.assertEqual([c.full_name for c in result.candidates],['actual/skills'])
+  self.assertEqual(result.cursor,'public-cursor');self.assertFalse(result.batch_finished)
+ def test_explicit_end_of_public_topic_payload_is_complete(self):
+  import json
+  payload=json.dumps([1,'x:'+json.dumps({'initialRepositories':[{'full_name':'actual/skills'}],'initialNextCursor':None})])
+  result=self.module().parse_trendshift('<script>self.__next_f.push('+payload+')</script>','https://trendshift.io/topics/ai-skills','2026-10-07T00:00:00Z')
+  self.assertTrue(result.batch_finished)

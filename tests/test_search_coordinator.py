@@ -28,7 +28,7 @@ class SearchCoordinatorTests(unittest.TestCase):
         self.ai=FakeAI();self.client=SimpleNamespace(readme_excerpt=lambda *a,**kw:'skills README',core_remaining=5000,search_remaining=30)
         self.source=SimpleNamespace(limited=False,notes=[],collected=0,trendshift=None)
         self.source.collect=self.collect
-        self.engine=SearchCoordinator(self.store,self.client,self.ai,sources=self.source,now=lambda:self.now)
+        self.engine=SearchCoordinator(self.store,self.client,self.ai,sources=self.source,now=lambda:self.now,legacy_review=True)
     def collect(self,scope,expansion,result,budget,event,progress):
         SearchStore(self.store).save_candidates(scope,tuple(ObservedRepository(repository(i,10000+i),self.now.isoformat()) for i in range(1,26)),())
         self.source.collected=25

@@ -24,7 +24,7 @@ class ApprovedSearchTests(unittest.TestCase):
   sources=SimpleNamespace(limited=False,notes=[],collected=count,trendshift=None)
   def collect(scope,*args):SearchStore(self.store).save_candidates(scope,tuple(ObservedRepository(repository(i,10000+i),self.now.isoformat()) for i in range(1,count+1)),())
   sources.collect=collect
-  return SearchCoordinator(self.store,client,ai,sources=sources,now=lambda:self.now),ai,reads
+  return SearchCoordinator(self.store,client,ai,sources=sources,now=lambda:self.now,legacy_review=True),ai,reads
  def test_growth_uses_official_numbers_without_any_ai_assessment(self):
   scope=SearchScope('growth',None,self.scope.local_date,'2026-10-04','',100,'model')
   engine,ai,_=self.engine(scope)
@@ -54,7 +54,8 @@ class ApprovedSearchTests(unittest.TestCase):
    def get_repository(self,name):calls.append('get');return repository(7,9000)
   candidate=DiscoveryCandidate(repository(7,9000).full_name,None,('ai_web_search',),self.now.isoformat())
   sources=SearchSources(Client(),self.store,None,None,lambda:0)
-  sources.collect(self.scope,None,AISearchResult((candidate,),(),(),1),RequestBudget(20,20,100),threading.Event(),lambda *a:None)
+  scope=replace(self.scope,local_date=datetime.now().astimezone().date().isoformat())
+  sources.collect(scope,None,AISearchResult((candidate,),(),(),1),RequestBudget(20,20,100),threading.Event(),lambda *a:None)
   self.assertEqual(calls,['page'])
 
 class RoundRobinTests(unittest.TestCase):

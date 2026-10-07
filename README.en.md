@@ -6,12 +6,12 @@
 
 Finding an interesting repository is only the beginning: understanding what it is and keeping track of it matter too. StarTrail brings **discovery, understanding, and organization** together in a Windows-first local reader, opened in the default browser.
 
-1. **Discover:** merge public sources with Codex-assisted query expansion, active web search, and evidence checks; use separate ranking rules for growth and keywords.
+1. **Discover:** merge public sources with Codex-assisted keyword expansion and direct public-source collection; use separate ranking rules for growth and keywords.
 2. **Understand:** six plain-language sections explain purpose, problems, audience, features, scenarios, and requirements. The first purpose line highlights the project type.
 3. **Organize:** revisit dated snapshots, follow projects, search folders, drag cards between categories, or classify directly from any detail page.
 
 > [!TIP]
-> The installer includes the runtime and offline Chinese/English models. **Local translation uses no AI quota.** Basic discovery and reading work without Codex. With automatic AI discovery enabled and Codex connected, project updates automatically run AI search and checks using the connected account's quota; full project explanations remain manual.
+> The installer includes the runtime and offline Chinese/English models. **Local translation uses no AI quota.** Basic discovery and reading work without Codex. With automatic AI discovery enabled and Codex connected, keyword expansion uses the connected account's quota; the growth board does not call AI; full project explanations remain manual.
 
 **Navigation:** [Get started](#download-and-get-started) · [The story](#how-this-project-started) · [Features](#features-and-interface) · [Data and privacy](#data-and-privacy) · [Development](#development-and-contributions) · [Limitations](#limitations-and-next-directions) · [License](#license-and-thanks)
 
@@ -61,22 +61,24 @@ These are actual usage screenshots. Projects, dates, rankings, and figures refle
 
 ### 1. Discover projects: growth and keywords
 
-**Growth ranks by verified daily additions; keywords rank by relevance and total Stars.** Both merge GitHub, public trend sources, and active AI discovery with traceable repository identities and facts.
+**Growth ranks by verified daily additions; keywords rank by relevance and total Stars.** Both merge GitHub and public trend sources with traceable repository identities and facts. AI assists keyword expansion only.
 
 ![Growth ranking and keyword tabs](docs/images/en/home.png)
 
 <details>
 <summary>Search, verification, ranking, and quota rules</summary>
 
-1. Collect first from paginated and partitioned GitHub search, Trending, Trendshift, tracked candidates, and active AI web discovery. Merge by authoritative repository identity while preserving sources.
-2. Growth uses validated official additions for the latest complete UTC day, sorted by daily additions, total Stars, and repository ID. AI may discover candidates; it does not reassess every growth count.
-3. Returning projects in the growth top five remain compact entries and do not consume five new-discovery slots.
-4. Preserve the original keyword and add up to six focused expressions and applicable topics. Inspect or correct them in the interface.
-5. After merging candidates, give AI the eligible catalog in one invocation to classify relevance, irrelevance, and uncertainty. The application sorts relevant repositories by official total Stars; model-generated popularity numbers are never facts.
-6. Apply archive and minimum-Star filters and exclude past displayed projects. Resolve today's cross-module occupancy after preceding rankings publish, so released slots do not discard valid candidates prematurely.
-7. Refresh the covered sources daily and reuse semantic judgments when no new decisions are needed. If new or changed material requires analysis, the invocation still includes the eligible catalog; a cache hit does not make that input free. Allow one automatic catalog analysis per keyword per day; repeated updates preserve reserved usage. Expansion, web discovery, and explicit manual continuation are separate calls. Prepare at most two hundred README excerpts per round and keep remaining candidates with public metadata, rather than ending relevance analysis at two hundred candidates.
-8. Catalog inputs have explicit size and model-context limits. If a limit or validation fails, explain the reason and preserve results. Network delays, quotas, incomplete pages, and uncertain evidence remain visible; exhaustive GitHub coverage is not promised. Local merging and ranking prioritize speed; external network and AI waits are shown separately.
-9. Modules advance in turn and publish in their original order. The sidebar distinguishes source reads, candidate-library size, submitted and completed AI decisions, cache hits, and pending work. Saved-page navigation does not search; duplicate clicks reuse active work. Due checks resume after sleep, and failures use a dismissible ten-second notice.
+1. Discover through original and expanded queries, paginated GitHub search with date/Star partitions, Trending, Trendshift, and the durable local catalog. Merge by official repository ID and retain provenance; popularity signals or model estimates never replace official numbers.
+2. Validate the latest complete UTC day and sort growth numerically by official new Stars, total Stars, and repository ID. Keep returning top-five entries and five new-discovery slots. The growth board makes no AI calls.
+3. Match keywords before sorting. Keep the original expression and up to six focused expansions. Official query hits, current name/description/topic matches supply search evidence. Apply archive, minimum-Star, and history rules, then sort by authoritative total Stars. A query match is not an AI-reviewed statement of purpose.
+4. Use AI only for keyword expansion; fetch fixed sources directly, without individual or whole-catalog reviews and without bulk README downloads for review. Six-section project understanding remains a separate manual action. Reuse valid expansion. Continuing discovery advances public-source pagination and saved cursors without an additional AI web search.
+5. Reuse evidence across refreshes. Search-page metadata needs no extra lookup; refresh old candidates by stable identity, with up to twenty repositories in an authenticated official metadata batch. Cache verified counts, including zero, for the same statistical day for six hours before rechecking. Changed dates, content, or rules invalidate corresponding evidence.
+6. Retain coverage and resumable ranges. Read subsequent pages and partition oversized queries; older repositories stay eligible. While awake and idle, prepare public facts locally without extra AI calls, recommendation history, or waking the computer. Keep interrupted and quota-limited work on disk; do not substitute page-one sampling for a completed search.
+7. Publish the whole issue together. Allocate growth first, then keywords in their original order, preserving displayed-history deduplication. Save all enabled boards in one transaction. A failed board, cancellation, date change, or changed configuration preserves the previous complete issue. Discovery alone never marks a project as displayed.
+8. Show actual time. Wall time includes network, AI, waiting, and saving. Display cumulative AI call time and stage timings separately; parallel stages may overlap. Bound official connections to four and keyword expansion calls to two, page database reads, and throttle progress writes. Failures use a dismissible ten-second notice and retain their reason.
+Foreground growth discovery reads recent repositories and public trend feeds while refreshing the known catalog. An independent idle cursor walks older discovery ranges. Partial or unavailable supplementary sources remain visible; a successful page read never means complete site coverage.
+
+9. State coverage limits. These rankings cover discovered candidates, not every relevant repository on GitHub. Broad first-time search, sleep gaps, a new keyword, remote quotas, or slow AI may take longer. Two minutes is a validation target, not a completion claim achieved through timeout or background catch-up. Show the actual number when fewer than five projects qualify.
 
 </details>
 
@@ -164,8 +166,8 @@ The forest background, translucent cards, menus, and scrollbars share a consiste
 <summary>Dates and source boundaries</summary>
 
 1. Daily additions use complete UTC days; saved dates use local time. For example, after 08:00 in UTC+8 on October 4, the latest complete UTC day is October 3; before 08:00 that day is not complete yet.
-2. Official GitHub metadata supplies identity and total Stars; official statistics supply daily additions. GitHub Trending, Trendshift, public activity, and AI discovery broaden the candidate pool.
-3. Topics and trends are finite. READMEs are untrusted content to read, not instructions to execute. AI discovery requires observed live-search events, followed by official repository resolution.
+2. Official GitHub metadata supplies identity and total Stars; official statistics supply daily additions. GitHub Trending, Trendshift, and public activity broaden the candidate pool; AI expands keywords only.
+3. Topics and trends are finite. READMEs are untrusted content to read, not instructions to execute. Repository identities and numeric facts are resolved through official GitHub data.
 4. Project explanations are model interpretations of public material rather than guarantees from the original author. History is saved local data, not continuous monitoring.
 
 </details>
@@ -178,7 +180,7 @@ The forest background, translucent cards, menus, and scrollbars share a consiste
 | 1 | History, follows, folders, preferences, translations | Stored in UserData; no project-operated cloud synchronization |
 | 2 | Discovery and README refresh | Public keywords and repository identifiers are queried against GitHub and public sources |
 | 3 | Local translation | Text stays in the local CPU worker; translation itself does not upload it |
-| 4 | Automatic AI discovery/checks and manual explanations | Public terms and repository material go to the connected Codex account, using its quota |
+| 4 | AI keyword expansion and manual explanations | Public terms and repository material go to the connected Codex account, using its quota |
 | 5 | GitHub authorization | Device authorization; credentials protected with Windows user-bound encryption |
 | 6 | Software upgrades | Anonymous fixed-repository release requests; no database or personal-log upload |
 
@@ -212,7 +214,7 @@ flowchart LR
 |---|---|---|
 | 1 | Startup and session API | __main__.py, browser_server.py |
 | 2 | Automatic and manual discovery | search_jobs.py, search_coordinator.py, service.py |
-| 3 | Public sources and AI discovery | search_sources.py, search_provider.py, codex_runner.py |
+| 3 | Public sources and keyword expansion | search_sources.py, search_provider.py, codex_runner.py |
 | 4 | Judgments, quotas, leases, and ranking | search_storage.py, search_types.py, search_ranking.py |
 | 5 | Snapshots, history, folders | storage.py, history_search.py, follow_folders.py |
 | 6 | Manual explanations and offline preparation | ai_service.py, project_translation.py, translation_worker.py |

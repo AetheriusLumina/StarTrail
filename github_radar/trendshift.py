@@ -48,11 +48,12 @@ class PublicPage(HTMLParser):
         for script in self.scripts:
             for match in re.finditer('"' + key + '":', script):
                 try:
-                    value, end = json.JSONDecoder().raw_decode(script[match.end():])
+                    suffix=script[match.end():].lstrip()
+                    value, end = json.JSONDecoder().raw_decode(suffix)
                 except ValueError:
                     continue
                 if isinstance(value, list):
-                    yield value, script[match.end() + end:match.end() + end + 350]
+                    yield value, suffix[end:end+350]
 
 
 def parse_trendshift(html: str, source_url: str, observed_at: str) -> DiscoveryBatch:
@@ -64,13 +65,26 @@ def parse_trendshift(html: str, source_url: str, observed_at: str) -> DiscoveryB
     page = PublicPage(); page.feed(html)
     topic = url.path.startswith("/topics/")
     homepage = url.path == "/"
+    topic_cursor=None;topic_finished=False
     if topic:
-        rows = [{"full_name": name} for href, name in page.links
-                if re.fullmatch(r"/repositories/\d+", href) and valid_repository_name(name)]
-        if not rows:
-            arrays = [rows for rows, _ in page.arrays("repositories")
-                      if rows and isinstance(rows[0], dict) and "full_name" in rows[0]]
-            rows = arrays[0] if len(arrays) == 1 else []
+        payloads=list(page.arrays("initialRepositories"))
+        if len(payloads)>1:raise SourceRequestError("Trendshift 主题结构变化，未读取成功")
+        if payloads:
+            rows,after=payloads[0]
+            # Server-rendered topic rows exclude unrelated sidebar/live links.
+            match=re.search(r'"initialNextCursor":',after)
+            if match:
+                try:topic_cursor,_=json.JSONDecoder().raw_decode(after[match.end():].lstrip())
+                except ValueError:raise SourceRequestError("Trendshift 主题分页标识无效")
+                if topic_cursor is not None and not isinstance(topic_cursor,str):raise SourceRequestError("Trendshift 主题分页标识无效")
+                topic_finished=topic_cursor is None
+        else:
+            rows = [{"full_name": name} for href, name in page.links
+                    if re.fullmatch(r"/repositories/\d+", href) and valid_repository_name(name)]
+            if not rows:
+                arrays = [rows for rows, _ in page.arrays("repositories")
+                          if rows and isinstance(rows[0], dict) and "full_name" in rows[0]]
+                rows = arrays[0] if len(arrays) == 1 else []
         source, kind, period = "trendshift_topic", "none", "topic"
     else:
         key = "initialData" if homepage else "repositories"
@@ -105,7 +119,7 @@ def parse_trendshift(html: str, source_url: str, observed_at: str) -> DiscoveryB
         raise SourceRequestError("Trendshift 未识别到公开项目，未读取成功")
     notes = (("主题首批候选，未核实全量分页；网站 AI 分类不是本软件 AI 精选",) if topic else
              (f"实际读取 {len(candidates)} 个项目；来源顺序与官方新增排名分别保存",))
-    return DiscoveryBatch(source, tuple(candidates.values()), None, not topic, notes)
+    return DiscoveryBatch(source, tuple(candidates.values()), topic_cursor, topic_finished if topic else True, notes)
 
 
 class TrendshiftClient:

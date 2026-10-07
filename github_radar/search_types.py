@@ -1,5 +1,5 @@
 """Search contracts independent of persistence, UI and network clients."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from .models import Repository, StarDay, StarSnapshot, Recommendation, GrowthCoverage
 from .ai_types import AIRepositoryInput
 from .discovery_types import DiscoveryCandidate, SourceEvidence
@@ -80,6 +80,16 @@ class SearchProgress:
     checked_completed: int = 0
     candidate_pool: int = 0
     limited: bool = False
+    # Timings reset per attempt; daily paid-use counters deliberately do not.
+    started_at: str = ''
+    elapsed_seconds: float = 0
+    ai_seconds: float = 0
+    ai_started_at: str = ''
+    stage_seconds: dict[str,float] = field(default_factory=dict)
+    official_checked: int = 0
+    matched_count: int = 0
+    search_mode: str = 'legacy'
+    source_status: dict[str,dict] = field(default_factory=dict)
     notes: tuple[str,...] = ()
 
 @dataclass(frozen=True, slots=True)

@@ -39,6 +39,23 @@ class ReadyConnection:
 
 
 class BrowserServerTests(unittest.TestCase):
+    def test_installer_launch_stops_preparation_before_opening(self):
+        from unittest.mock import patch
+        order=[]
+        def launch(*args):
+            order.append('launch')
+            raise ValueError('test launch failed')
+        with patch.object(self.server,'_stop_preparation',side_effect=lambda:order.append('stop')), patch('github_radar.software_update.launch_installer',side_effect=launch):
+            with self.assertRaises(ValueError):self.server._software_ready(None,None)
+        self.assertEqual(order,['stop','launch'])
+
+    def test_close_stops_preparation_before_closing_services(self):
+        from unittest.mock import patch
+        order=[]
+        with patch.object(self.server,'_stop_preparation',side_effect=lambda:order.append('stop')), patch.object(self.server.software_updater,'close',side_effect=lambda:order.append('updater')):
+            self.server.close()
+        self.assertEqual(order[:2],['stop','updater'])
+
     def test_search_expansion_is_editable_without_ai_and_origin_protected(self):
         rule=self.store.add_keyword('skills',1000)
         path=f'/api/search/keywords/{rule.id}/expansion'

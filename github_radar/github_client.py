@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse, parse_qs
-from urllib.request import Request, urlopen, build_opener
+from urllib.request import Request, urlopen, build_opener, getproxies
 
 from .models import OfficialStarWeek, Repository, StarDay
 from .discovery_types import DiscoveryBatch, DiscoveryCandidate, SearchPage, valid_repository_name
@@ -35,7 +35,12 @@ class GitHubClient:
     BASE_URL = "https://api.github.com"
 
     def __init__(self, opener=urlopen, budget=None, clock=time.monotonic, token_provider=None, on_auth_failure=None):
-        self._opener = build_opener(SameOriginRedirect()).open if opener is urlopen else opener
+        self._transport=None
+        if opener is urlopen and not any(getproxies().get(k) for k in ('https','all')):
+            from .github_transport import PooledHTTPSOpener
+            self._transport=PooledHTTPSOpener();self._opener=self._transport
+        else:self._opener=build_opener(SameOriginRedirect()).open if opener is urlopen else opener
+        self.graphql_remaining=None;self.graphql_reset_at=None
         self.remaining: int | None = None
         self.core_remaining: int | None = None
         self.search_remaining: int | None = None
@@ -50,6 +55,9 @@ class GitHubClient:
         self.request_cache = None
         self.token_provider = token_provider
         self.on_auth_failure=on_auth_failure
+
+    def close(self):
+        if self._transport:self._transport.close()
 
     def _open_authenticated(self,request,timeout):
         try:return self._opener(request,timeout=timeout)
@@ -67,17 +75,19 @@ class GitHubClient:
                     with self._quota_lock:
                         self.remaining=self.core_remaining=self.search_remaining=None
                         self.reset_at=self.core_reset_at=self.search_reset_at=None
+                        self.graphql_remaining=self.graphql_reset_at=None
                         if self.budget is not None:self.budget.reset_identity()
                 headers={k:v for k,v in request.header_items() if k.lower()!='authorization'}
                 updated=self._authorization() if self.on_auth_failure else {}
                 if updated.get('Authorization')!=authorization:headers.update(updated)
                 request._radar_auth_epoch=self._auth_epoch
                 if self.budget is not None:
-                    resource='search' if urlparse(request.full_url).path.startswith('/search/') else 'core'
+                    api_path=urlparse(request.full_url).path
+                    resource='external' if api_path=='/graphql' else 'search' if api_path.startswith('/search/') else 'core'
                     try:self.budget.spend(resource,1,self.clock())
                     except ValueError as error:raise GitHubRequestError('GitHub 请求预算或更新时间已到限制') from error
                     timeout=min(timeout,self.budget.deadline-self.clock())
-            retry=Request(request.full_url,headers=headers)
+            retry=Request(request.full_url,data=request.data,headers=headers,method=request.get_method())
             # One recovery only; never loop on a rejected credential.
             return self._opener(retry,timeout=timeout)
 
@@ -138,6 +148,57 @@ class GitHubClient:
                 cursor = raw
         return DiscoveryBatch("github_public_catalog", tuple(candidates), cursor, cursor is None,
                               ("公开仓库目录持续积累；单批不是全站覆盖",))
+
+    def get_repositories_batch(self,names):
+        """Bounded official totals/metadata. This is NOT a daily-Star batch."""
+        names=tuple(dict.fromkeys(names))
+        if not 1<=len(names)<=20 or any(not valid_repository_name(n) for n in names):raise ValueError('批量仓库名称无效')
+        authorization=self._authorization()
+        if not authorization:raise GitHubRequestError('批量元数据需要有效GitHub授权')
+        if self.graphql_reset_at is not None and time.time()>=self.graphql_reset_at:self.graphql_remaining=None;self.graphql_reset_at=None
+        if self.graphql_remaining==0:raise GitHubRateLimitError(self.graphql_reset_at)
+        fields='databaseId nameWithOwner url description stargazerCount isArchived primaryLanguage { name } repositoryTopics(first:100) { nodes { topic { name } } }'
+        parts=[]
+        for i,name in enumerate(names):
+            owner,repo=name.split('/');parts.append('r'+str(i)+': repository(owner:'+json.dumps(owner)+',name:'+json.dumps(repo)+') { '+fields+' }')
+        payload={'query':'query { '+ ' '.join(parts)+' }'}
+        timeout=20
+        if self.budget is not None:
+            if not self.budget.can_spend('external',1,self.clock()):raise GitHubRequestError('GitHub批量请求时间预算已到')
+            timeout=min(timeout,self.budget.deadline-self.clock())
+        request=Request(self.BASE_URL+'/graphql',data=json.dumps(payload).encode(),headers={'User-Agent':'GitHubRadar/0.1','Content-Type':'application/json','Accept':'application/json',**authorization},method='POST')
+        request._radar_auth_epoch=self._auth_epoch
+        try:
+            with self._open_authenticated(request,timeout) as response:
+                self._capture_limit(response.headers,'/graphql',request._radar_auth_epoch)
+                raw=response.read(MAX_RESPONSE_BYTES+1)
+                if len(raw)>MAX_RESPONSE_BYTES:raise GitHubRequestError('GitHub批量响应超过大小限制')
+            body=json.loads(raw.decode('utf-8'))
+            if not isinstance(body,dict) or not isinstance(body.get('data'),dict):raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
+            aliases={'r'+str(i) for i in range(len(names))}
+            if not aliases.issubset(body['data']):raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
+            # A missing repository is a per-identity condition, not a failure
+            # of unrelated aliases. Callers retry its stable ID via REST.
+            for error in body.get('errors') or ():
+                path=error.get('path') if isinstance(error,dict) else None
+                if not isinstance(path,list) or len(path)!=1 or path[0] not in aliases or error.get('type')!='NOT_FOUND' or body['data'][path[0]] is not None:
+                    raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
+            result={}
+            for i,name in enumerate(names):
+                row=body['data'].get('r'+str(i))
+                if row is None:continue
+                repo=self._repository({'id':row['databaseId'],'full_name':row['nameWithOwner'],'html_url':row['url'],'description':row['description'],'stargazers_count':row['stargazerCount'],'archived':row['isArchived'],'language':(row.get('primaryLanguage') or {}).get('name'),'topics':[n['topic']['name'] for n in row['repositoryTopics']['nodes']]})
+                result[name.casefold()]=repo
+                if self.request_cache:
+                    rest={'id':repo.id,'full_name':repo.full_name,'html_url':repo.html_url,'description':repo.description,'stargazers_count':repo.stars,'archived':repo.archived,'language':repo.language,'topics':list(repo.topics)}
+                    self.request_cache.put('/repos/'+ '/'.join(quote(part,safe='') for part in repo.full_name.split('/')),rest)
+            return result
+        except HTTPError as exc:
+            self._capture_limit(exc.headers,'/graphql',request._radar_auth_epoch)
+            if exc.code in (403,429):raise GitHubRateLimitError(self.graphql_reset_at) from exc
+            raise GitHubRequestError(f'GitHub批量请求失败（HTTP {exc.code}）',status=exc.code,path='/graphql') from exc
+        except (URLError,socket.timeout,TimeoutError,OSError,HTTPException,SourceRequestError) as exc:raise GitHubRequestError('连接GitHub批量接口失败，请检查网络') from exc
+        except (ValueError,KeyError,TypeError) as exc:raise GitHubRequestError('GitHub批量元数据格式无效') from exc
 
     def get_repository(self, full_name: str) -> Repository:
         parts = full_name.split("/")
@@ -350,6 +411,8 @@ class GitHubClient:
             if resource == "core":
                 self.core_remaining = self.remaining
                 self.core_reset_at = self.reset_at
+            elif resource == "graphql":
+                self.graphql_remaining=self.remaining;self.graphql_reset_at=self.reset_at
             elif resource == "search":
                 self.search_remaining = self.remaining
                 self.search_reset_at = self.reset_at
