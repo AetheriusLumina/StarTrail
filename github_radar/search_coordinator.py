@@ -119,7 +119,7 @@ class SearchCoordinator:
                 if hasattr(self.client,'budget'):self.client.budget=previous_budget;self.client.clock=previous_clock
             yield value
 
-    def _run_steps(self,scope,*,max_new=200,continue_search=False,cancel_event=None,on_progress=None,defer_publish=False,prepare_only=False,budget_seconds=1800):
+    def _run_steps(self,scope,*,max_new=200,continue_search=False,cancel_event=None,on_progress=None,defer_publish=False,prepare_only=False,budget_seconds=None):
         if not self.legacy_review:
             from .search_local import local_steps
             return (yield from local_steps(self,scope,continue_search=continue_search,cancel_event=cancel_event,on_progress=on_progress,defer_publish=defer_publish,prepare_only=prepare_only,budget_seconds=budget_seconds))
@@ -337,6 +337,45 @@ class SearchCoordinator:
             self.search.finish_run(lease)
         return progress
 
+    def _wait_core_steps(self,budget,tick,event):
+        """Wait only for a server-declared quota reset; cancellation stays live."""
+        if not isinstance(self.client,GitHubClient):return False
+        client=self.client
+        while not event.is_set() and self.clock()<budget.deadline:
+            # Secondary cooldown gates every official request, including the
+            # quota probe. Wait before probing rather than failing immediately.
+            while self.now().timestamp()<client.retry_not_before and not event.is_set():
+                if client.retry_not_before-self.now().timestamp()>=budget.deadline-self.clock():return False
+                recovery=datetime.fromtimestamp(client.retry_not_before,self.now().tzinfo).isoformat()
+                tick(stage='waiting_quota',notes=('GitHub限流等待至 '+recovery+'；已完成核算保留，可取消',))
+                yield None,None
+                event.wait(min(1,max(0,client.retry_not_before-self.now().timestamp())))
+            if event.is_set():return False
+            prior=client.budget
+            try:
+                # /rate_limit does not consume the primary quota. Do not let
+                # the exhausted local reservation block this recovery probe.
+                client.budget=None
+                core=client._get_json('/rate_limit')['resources']['core']
+            except (GitHubRequestError,ValueError,OSError,KeyError,TypeError) as exc:
+                tick(notes=('无法读取GitHub额度恢复时间：'+str(exc)[:150],));return False
+            finally:client.budget=prior
+            remaining=core.get('remaining');reset=core.get('reset')
+            if type(remaining) is not int or type(reset) is not int:return False
+            with budget._lock:
+                budget.core_remaining=remaining;budget._core_probe=False
+            client.core_remaining=remaining;client.core_reset_at=reset
+            ready_at=max(reset if remaining<=budget.core_reserve else 0,client.retry_not_before)
+            if ready_at<=self.now().timestamp():
+                return budget.can_spend('core',1,self.clock())
+            if ready_at-self.now().timestamp()>=budget.deadline-self.clock():return False
+            recovery=datetime.fromtimestamp(ready_at,self.now().tzinfo).isoformat()
+            while self.now().timestamp()<ready_at and not event.is_set():
+                tick(stage='waiting_quota',notes=('GitHub额度恢复前等待至 '+recovery+'；已完成核算保留，可取消',))
+                yield None,None
+                event.wait(min(1,max(0,ready_at-self.now().timestamp())))
+        return False
+
     def _frontier(self,scope,budget,tick,event):
         if scope.section=='keyword':
             for row in self.search.frontier(scope):yield row,None
@@ -370,13 +409,20 @@ class SearchCoordinator:
                 if current.archived or current.stars<scope.min_stars:return current,None,True
                 return current,official(self.client.star_history_weeks,current.full_name),False
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='star-history') as pool:
-            exhausted=False
-            while not exhausted:
+            from collections import deque
+            exhausted=False;retry_rows=deque();needs_wait=False
+            while not exhausted or retry_rows:
+                # Previous request wave is fully drained before any yield/wait:
+                # cooperative modules may otherwise replace the shared budget.
+                if needs_wait:
+                    if not (yield from self._wait_core_steps(budget,tick,event)):
+                        tick(limited=True,notes=('官方日增核算达到请求预算，未核算候选保留断点',));break
+                    needs_wait=False
                 tick(stage='measuring');batch=[]
                 current_workers=min(workers,getattr(self.client,'request_concurrency',workers))
                 width=current_workers if budget.can_spend('core',current_workers,self.clock()) else 1
                 for _ in range(width):
-                    try:row=next(rows)
+                    try:row=retry_rows.popleft() if retry_rows else next(rows)
                     except StopIteration:exhausted=True;break
                     from .search_storage import _repository
                     repo=_repository(json.loads(row['payload']))
@@ -388,8 +434,7 @@ class SearchCoordinator:
                         continue
                     cached=getattr(self.client,'has_cached_star_history',lambda name:False)(repo.full_name)
                     if not cached and not budget.can_spend('core',1,self.clock()):
-                        tick(limited=True,notes=('官方日增核算达到请求预算，未核算候选保留断点',))
-                        exhausted=True;break
+                        retry_rows.appendleft(row);needs_wait=True;break
                     batch.append((row,repo,pool.submit(fetch,repo)))
                 for row,repo,future in batch:
                     try:
@@ -410,8 +455,9 @@ class SearchCoordinator:
                         self.store.mark_catalog_scored(repo.id,self.now().isoformat())
                         if day and day.added>0:measured.append((row,day,repo.stars))
                     except (GitHubRequestError,ValueError,OSError) as exc:
-                        if isinstance(exc,GitHubRateLimitError):exhausted=True
-                        tick(limited=True,notes=(str(exc)[:300],))
+                        if isinstance(exc,GitHubRateLimitError):
+                            retry_rows.append(row);needs_wait=True
+                        else:tick(limited=True,notes=(str(exc)[:300],))
                 yield None,None
         measured.sort(key=lambda item:(-item[1].added,-item[2],item[0]['repo_id']))
         for row,day,_ in measured:yield row,day

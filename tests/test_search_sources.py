@@ -10,6 +10,24 @@ from github_radar.discovery_types import SearchPage,RequestBudget,DiscoveryCandi
 from tests.test_storage import repository
 
 class SearchSourcesTests(unittest.TestCase):
+    def test_new_authenticated_metadata_is_batched_without_per_repository_rest(self):
+        from github_radar.github_client import GitHubClient
+        calls=[]
+        repos={'example/project-'+str(i):replace(repository(i,2000+i),full_name='example/project-'+str(i)) for i in range(1,46)}
+        client=GitHubClient(opener=lambda *a,**kw:None,token_provider=lambda:'isolated-token')
+        def batch(names):
+            calls.append(tuple(names));return {name.casefold():repos[name.casefold()] for name in names}
+        def forbidden(*args):raise AssertionError('unnecessary per-repository REST')
+        client.get_repositories_batch=batch;client.get_repository=forbidden
+        source=SearchSources(client,self.store,None,None,lambda:0)
+        candidates=[DiscoveryCandidate(r.full_name,r.id,('tracked',),'2026-10-04T10:00:00Z') for r in repos.values()]
+        candidates += candidates[:5]
+        list(source._collect_metadata_steps(candidates,self.scope,self.budget,threading.Event(),lambda *a:None))
+        self.assertEqual(len(calls),3)
+        self.assertEqual(sum(map(len,calls)),45)
+        self.assertEqual(SearchStore(self.store).candidate_count(self.scope),45)
+        self.assertFalse(source.limited)
+
     def test_next_day_search_opens_fresh_range_without_losing_old_cursor(self):
         from datetime import date
         source=SearchSources(None,self.store,None,None,lambda:0)

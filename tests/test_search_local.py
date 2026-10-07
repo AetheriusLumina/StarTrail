@@ -12,6 +12,69 @@ from github_radar.models import OfficialStarWeek,StarDay,StarSnapshot,Recommenda
 from tests.test_storage import repository
 
 class LocalDiscoveryTests(unittest.TestCase):
+ def test_secondary_limit_waits_before_quota_probe_and_retries_retained_row(self):
+  from github_radar.github_client import GitHubClient,GitHubRateLimitError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=1)
+  engine.client=client;client.core_remaining=5000;calls=[]
+  def limits(path):
+   self.assertGreaterEqual(self.now.timestamp(),client.retry_not_before)
+   return {'resources':{'core':{'remaining':4999,'reset':int(self.now.timestamp())+3600}}}
+  client._get_json=limits
+  def history(name):
+   calls.append(name)
+   if len(calls)==1:
+    client.retry_not_before=self.now.timestamp()+2
+    raise GitHubRateLimitError(int(client.retry_not_before))
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+  client.star_history_weeks=history
+  class Event:
+   def is_set(_):return False
+   def wait(_,seconds):self.time[0]+=seconds;self.now+=timedelta(seconds=seconds);return False
+  p=engine.run(scope,cancel_event=Event())
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(len(calls),2)
+  self.assertEqual(p.official_checked,1);self.assertEqual(p.pending,0)
+
+ def test_quota_wait_resumes_at_server_reset_and_can_be_canceled(self):
+  from github_radar.github_client import GitHubClient
+  from github_radar.discovery_types import RequestBudget
+  engine=self.engine(1);client=GitHubClient(opener=lambda *a,**kw:None)
+  engine.client=client;calls=[];stages=[];reset=int(self.now.timestamp())+2
+  def limits(path):
+   calls.append(path);return {'resources':{'core':{'remaining':10 if len(calls)==1 else 50,'reset':reset}}}
+  client._get_json=limits
+  class Event:
+   def is_set(_):return False
+   def wait(_,seconds):self.time[0]+=seconds;self.now+=timedelta(seconds=seconds);return False
+  budget=RequestBudget(10,30,float('inf'))
+  def tick(**kw):stages.append(kw.get('stage'))
+  iterator=engine._wait_core_steps(budget,tick,Event())
+  while True:
+   try:next(iterator)
+   except StopIteration as done:result=done.value;break
+  self.assertTrue(result);self.assertEqual(budget.core_remaining,50)
+  self.assertEqual(len(calls),2);self.assertIn('waiting_quota',stages)
+  canceled=threading.Event();canceled.set()
+  iterator=engine._wait_core_steps(RequestBudget(10,30,float('inf')),tick,canceled)
+  with self.assertRaises(StopIteration) as stopped:next(iterator)
+  self.assertFalse(stopped.exception.value)
+
+ def test_foreground_update_has_no_whole_run_time_cutoff(self):
+  engine=self.engine(3);original=engine.sources.collect
+  def slow_collect(*args):
+   self.time[0]+=4000;return original(*args)
+  engine.sources.collect=slow_collect
+  p=engine.run(self.scope)
+  self.assertEqual(p.status,'done',p.notes)
+  self.assertGreater(p.elapsed_seconds,4000)
+ def test_explicit_background_budget_still_bounds_preparation(self):
+  engine=self.engine(3);original=engine.sources.collect
+  def slow_collect(*args):
+   self.time[0]+=100;return original(*args)
+  engine.sources.collect=slow_collect
+  p=engine.run(self.scope,prepare_only=True,budget_seconds=60)
+  self.assertEqual(p.status,'paused')
+
  def test_failed_growth_retains_all_errors_and_unmeasured_count(self):
   from github_radar.github_client import GitHubRequestError
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
@@ -117,7 +180,7 @@ class LocalDiscoveryTests(unittest.TestCase):
   def opener(request,timeout):
    calls.append(request.full_url);raise HTTPError(request.full_url,429,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO())
   engine.client=GitHubClient(opener=opener,request_concurrency=1);engine.client.core_remaining=5000
-  p=engine.run(scope)
+  p=engine.run(scope,budget_seconds=10)
   self.assertEqual(p.status,'paused');self.assertEqual(len(calls),1);self.assertEqual(p.pending,5)
 
  def setUp(self):

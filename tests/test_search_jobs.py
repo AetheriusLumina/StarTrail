@@ -18,6 +18,23 @@ class SearchJobsTests(unittest.TestCase):
             self.calls.append((scope.section,scope.keyword_id,scope.stat_date))
             return SearchProgress('job',scope.section,scope.keyword_id,scope.local_date,status='done')
         return SimpleNamespace(run=run,provider=SimpleNamespace(cancel=lambda:None))
+    def test_long_update_keeps_deferred_module_and_global_leases_alive(self):
+        from datetime import timedelta
+        from github_radar.search_storage import SearchStore
+        from github_radar.search_types import SearchScope
+        search=SearchStore(self.store)
+        scope=SearchScope('growth',None,self.now.date().isoformat(),None,'',100,None)
+        global_lease=search.claim_run(scope,'test-owner',namespace='refresh',now=self.now.timestamp(),ttl=1900)
+        keyword=SearchScope('keyword',self.a.id,scope.local_date,None,'a',100,None)
+        module_lease=search.claim_run(keyword,'test-module',now=self.now.timestamp(),ttl=1900)
+        jobs=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,self.engine,now=lambda:self.now)
+        jobs._engines=[SimpleNamespace(current_lease=module_lease)]
+        self.now+=timedelta(seconds=1800)
+        self.assertTrue(jobs._renew_leases(search,global_lease))
+        self.now+=timedelta(seconds=1800)
+        self.assertTrue(search.renew_run(global_lease,now=self.now.timestamp()))
+        self.assertTrue(search.renew_run(module_lease,now=self.now.timestamp()))
+
     def test_manual_continue_uses_same_coordinator_and_extra_bounded_batch(self):
         service=RadarService(SimpleNamespace(),self.store);extra=[]
         def engine():

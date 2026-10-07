@@ -147,6 +147,9 @@ class SearchSources:
     def _collect_metadata_steps(self,candidates,scope,budget,cancel_event,on_progress):
         # Only network waits overlap. Evidence and SQLite writes remain ordered
         # on this thread, with at most four requests/results in memory.
+        if isinstance(self.client,GitHubClient) and self.client._authorization():
+            yield from self._collect_authenticated_metadata_steps(candidates,scope,budget,cancel_event,on_progress)
+            return
         resolved={};index=0
         workers=min(4,max(1,self.metadata_workers)) if isinstance(self.client,GitHubClient) else 1
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='metadata') as pool:
@@ -191,6 +194,54 @@ class SearchSources:
                         resolved[candidate.full_name.casefold()]=observation
                         self.search.save_candidates(scope,(observation,),())
                         self.collected+=1;on_progress('collecting',self.collected)
+                yield None
+
+    def _collect_authenticated_metadata_steps(self,candidates,scope,budget,cancel_event,on_progress):
+        # New source entries use the same official batching as durable metadata.
+        # Merge names for network reads but preserve every source's evidence.
+        groups={}
+        for candidate in candidates:
+            if valid_repository_name(candidate.full_name):groups.setdefault(candidate.full_name.casefold(),[]).append(candidate)
+        unresolved=[]
+        for key,items in groups.items():
+            known=self.search.observation_named_today(scope,items[0].full_name)
+            if known and all(c.repo_id is None or c.repo_id==known.repo.id for c in items):
+                for candidate in items:self._accept_candidate(candidate,known.repo)
+            else:unresolved.append((key,items))
+        workers=min(4,max(1,self.metadata_workers))
+        with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='source-batch') as pool:
+            for offset in range(0,len(unresolved),20*workers):
+                if cancel_event.is_set():self.limited=True;return
+                if not budget.can_spend('external',1,self.clock()):self.limited=True;return
+                wave=unresolved[offset:offset+20*workers]
+                chunks=[wave[i:i+20] for i in range(0,len(wave),20)]
+                futures=[pool.submit(self.client.get_repositories_batch,tuple(items[0].full_name for _,items in chunk)) for chunk in chunks]
+                for chunk,future in zip(chunks,futures):
+                    if cancel_event.is_set():
+                        for job in futures:job.cancel()
+                        self.limited=True;return
+                    try:values=future.result()
+                    except (GitHubRequestError,ValueError,OSError) as exc:
+                        self.notes.append(str(exc));self.limited=True;continue
+                    observations=[]
+                    for key,items in chunk:
+                        repo=values.get(key)
+                        for candidate in items:
+                            if repo is None or (candidate.repo_id is not None and repo.id!=candidate.repo_id):
+                                if candidate.repo_id is None:
+                                    self.notes.append('仓库 '+candidate.full_name+' 未找到或无访问权限，已跳过');continue
+                                try:current=self._call(budget,'core',self.client.get_repository_by_id,candidate.repo_id)
+                                except (GitHubRequestError,ValueError,OSError) as exc:
+                                    if not self._missing(candidate.repo_id,exc):self.notes.append(str(exc));self.limited=True
+                                    continue
+                            else:current=repo
+                            item=self._accept_candidate(candidate,current)
+                            if item:
+                                observations.append(item)
+                                if scope.section=='keyword' and key in getattr(self,'_ai_names',set()):self.search.save_match(scope,item.repo,scope.term,'ai_search',item.observed_at)
+                            else:self.limited=True
+                    self.search.save_candidates(scope,observations,())
+                    self.collected+=len({o.repo.id for o in observations});on_progress('collecting',self.collected)
                 yield None
 
     def refresh_candidates_steps(self,scope,budget,cancel_event,on_progress):

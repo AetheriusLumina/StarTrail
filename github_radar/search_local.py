@@ -17,10 +17,11 @@ def replay(data):
     candidates=tuple(DiscoveryCandidate(**{**c,'source_names':tuple(c['source_names']),'evidence':tuple(SourceEvidence(**{**e,'topics':tuple(e['topics'])}) for e in c['evidence'])}) for c in data['candidates'])
     return AISearchResult(candidates,tuple(data['coverage']),tuple(data['notes']),data['web_search_calls'])
 
-def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progress=None,defer_publish=False,prepare_only=False,budget_seconds=1800):
-    e=engine;event=cancel_event or threading.Event();started=e.clock();deadline=started+max(1,min(1800,budget_seconds))
+def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progress=None,defer_publish=False,prepare_only=False,budget_seconds=None):
+    e=engine;event=cancel_event or threading.Event();started=e.clock();deadline=float("inf") if budget_seconds is None else started+max(1,budget_seconds)
     lease=e.search.claim_run(scope,e.owner,now=e.now().timestamp())
     if not lease.acquired:return e.search.progress(lease.job_id)
+    e.current_lease=lease
     e.deferred_publication=None;e._timing=SearchTiming(e.clock);e._timing.resume();e._ai_seconds=0
     p=replace(e.search.progress(lease.job_id),status='running',stage='expanding',notes=(),started_at=e.now().isoformat(),judgment_calls=0,catalog_calls=0,newly_checked=0,checked_completed=0,matched_count=0,search_mode='discovery')
     def metrics():return dict(elapsed_seconds=round(max(0,e.clock()-started),3),ai_seconds=round(e._ai_seconds,3),stage_seconds=e._timing.snapshot())
@@ -34,7 +35,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         e._timing.switch(changes.get('stage',p.stage));changes.update(metrics());p=replace(p,**changes)
         if not important and e.clock()-last_saved[0]<1:return
         last_saved[0]=e.clock()
-        if not e.search.renew_run(lease,now=e.now().timestamp(),ttl=max(1,deadline-e.clock())):raise AIOutputError('任务已被其他更新替代')
+        if not e.search.renew_run(lease,now=e.now().timestamp(),ttl=min(1900,max(1,deadline-e.clock()))):raise AIOutputError('任务已被其他更新替代')
         e.search.save_progress(p,lease=lease)
         if on_progress:on_progress(p)
     def ai_steps(call,*args,**kw):
@@ -144,5 +145,6 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         p=replace(p,status='canceled' if event.is_set() else 'paused',stage='stopped',limited=True,ai_started_at='',notes=tuple(dict.fromkeys((*p.notes,str(exc)[:300]))),**metrics());e.search.save_progress(p,lease=lease)
     finally:
         logging.getLogger(__name__).info('search timing %s',json.dumps({'section':scope.section,'keyword_id':scope.keyword_id,'status':p.status,'candidate_pool':p.candidate_pool,'official_checked':p.official_checked,**metrics()},ensure_ascii=False))
-        if e.deferred_publication is None:e.search.finish_run(lease)
+        if e.deferred_publication is None:
+            e.current_lease=None;e.search.finish_run(lease)
     return p

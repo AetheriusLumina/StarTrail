@@ -18,6 +18,24 @@ class SearchJobs:
         self._event=threading.Event();self._active=None;self._guard=threading.Lock()
         self.owner=uuid.uuid4().hex;self.progress=[]
 
+    def _renew_leases(self,search,lease):
+        if not search.renew_run(lease,now=self.now().timestamp(),ttl=1900):return False
+        engines=list(getattr(self,'_engines',()))
+        if self._active is not None and self._active not in engines:engines.append(self._active)
+        for engine in engines:
+            module=getattr(engine,'current_lease',None)
+            if module is not None and not search.renew_run(module,now=self.now().timestamp(),ttl=1900):
+                if getattr(engine,'current_lease',None)==module:return False
+        return True
+
+    def _start_heartbeat(self,search,lease):
+        stop=threading.Event()
+        def heartbeat():
+            while not stop.wait(30):
+                if not self.store.load_search_enabled() or not self._renew_leases(search,lease):self.cancel();return
+        thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
+        return stop,thread
+
     def cancel(self):
         self._event.set()
         for engine in getattr(self,'_engines',()):engine.provider.cancel()
@@ -62,13 +80,16 @@ class SearchJobs:
         lease=search.claim_run(global_scope,self.owner,namespace='refresh',now=now.timestamp(),ttl=1900)
         if not lease.acquired:raise ValueError('已有更新正在进行，请完成后再继续')
         self._event=threading.Event()
+        heartbeat_stop,thread=self._start_heartbeat(search,lease)
         try:
             scope=SearchScope('keyword',rule.id,day,None,rule.term,rule.min_stars,model)
             self._active=self.factory()
             progress=self._active.run(scope,max_new=200,continue_search=True,cancel_event=self._event)
             if progress.status not in ('done','partial'):raise ValueError('；'.join(progress.notes) or '检索未完成，原结果保留')
             return progress
-        finally:self._active=None;search.finish_run(lease)
+        finally:
+            heartbeat_stop.set();thread.join(timeout=1)
+            self._active=None;search.finish_run(lease)
 
     def refresh(self,day,observed_at):
         """Record the whole wall clock, including readiness, AI and failed work."""
@@ -105,11 +126,7 @@ class SearchJobs:
             return replace(self.service.load_latest(day),status='cached',message='已有更新正在进行，复用当前任务')
         self._event=threading.Event();self.progress=[]
         scopes=[scope]+[SearchScope('keyword',r.id,day,None,r.term,r.min_stars,model) for r in self.store.list_keywords() if r.enabled]
-        heartbeat_stop=threading.Event()
-        def heartbeat():
-            while not heartbeat_stop.wait(30):
-                if not self.store.load_search_enabled() or not search.renew_run(lease,now=self.now().timestamp(),ttl=1900):self.cancel();return
-        thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
+        heartbeat_stop,thread=self._start_heartbeat(search,lease)
         try:
             if not self.store.mark_search_incomplete(day, True, lease=lease, now=self.now().timestamp()):
                 raise ValueError('当前更新已被其他任务替代，已保存结果保留')
@@ -145,7 +162,7 @@ class SearchJobs:
                         self._active=engine
                         try:latest[index]=next(iterator)
                         except StopIteration as complete:latest[index]=complete.value;done[index]=True
-                    search.renew_run(lease,now=self.now().timestamp(),ttl=1900)
+                    self._renew_leases(search,lease)
                     if any(p and p.ai_started_at and not done[i] for i,p in enumerate(latest)):time.sleep(.05)
                 self.progress=[p for p,complete in zip(latest,done) if p is not None and complete]
                 if atomic and all(done) and all(p is not None and p.status=='ready' for p in latest) and not self._event.is_set() and self.store.load_search_enabled():

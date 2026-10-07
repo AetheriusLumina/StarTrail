@@ -371,9 +371,9 @@ function describeCoverage(coverage) {
   const sourceLabels = {search: "GitHub 搜索", trending: "热门项目", tracked: "已跟踪项目"};
   const sources = (coverage.source_names || []).map((name) => tr(sourceLabels[name] || name));
   return language === "en"
-    ? `${coverage.candidate_count} candidates found · ${coverage.scored_count} verified · `
+    ? `Saved board: ${coverage.candidate_count} candidates found · ${coverage.scored_count} verified · `
       + `Statistical date ${coverage.stat_date || tr("待建立")} · Sources ${sources.join(", ") || tr("待建立")}`
-    : `发现候选 ${coverage.candidate_count} 个 · 成功核算 ${coverage.scored_count} 个 · `
+    : `已保存榜单：来源读取 ${coverage.candidate_count} 个 · 核算（含已有候选）${coverage.scored_count} 个 · `
       + `统计日 ${coverage.stat_date || "待建立"} · 来源 ${sources.join("、") || "待建立"}`;
 }
 
@@ -662,8 +662,8 @@ function renderIssue(issue) {
   for (const group of issue.keyword_groups || [])
     if (group.cards.length < 5) shortage.push(language === "en"
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
-  const stages={expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',matching:'匹配检索依据',prepared:'等待整份保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
-  const stageEn={expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',matching:'Matching queries',prepared:'Waiting for atomic save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  const stages={waiting_quota:'等待 GitHub 额度恢复',expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',matching:'匹配检索依据',prepared:'等待整份保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+  const stageEn={waiting_quota:'Waiting for GitHub quota reset',expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',matching:'Matching queries',prepared:'Waiting for atomic save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
   byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>(p.status==='running'||p.status==='ready'));
   if(byId('search-cancel').hidden)byId('search-cancel').disabled=false;
   const timingText=p=>{
