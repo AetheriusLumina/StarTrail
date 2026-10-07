@@ -153,6 +153,37 @@ class RateDowngradeTests(unittest.TestCase):
   with self.assertRaises(GitHubRequestError) as caught:client.get_repository('a/b')
   self.assertEqual(caught.exception.status,403);self.assertEqual(client.request_concurrency,100)
 
+class RateBurstTests(unittest.TestCase):
+ def test_concurrent_secondary_burst_updates_cooldown_atomically(self):
+  from threading import Barrier,RLock
+  from concurrent.futures import ThreadPoolExecutor
+  gate=Barrier(20)
+  class CountingLock:
+   def __init__(self):self.lock=RLock();self.entries=0
+   def __enter__(self):self.lock.acquire();self.entries+=1
+   def __exit__(self,*args):self.lock.release()
+  client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=100)
+  lock=CountingLock();client._quota_lock=lock
+  def fail(_):
+   gate.wait()
+   return client._rate_error(HTTPError('https://api.github.com',429,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO()),4999,2000,'/repos/a/b')
+  with patch('github_radar.github_client.time.time',return_value=1000):
+   with ThreadPoolExecutor(max_workers=20) as executor:list(executor.map(fail,range(20)))
+  self.assertEqual(client.request_concurrency,50)
+  self.assertEqual(client.retry_not_before,1060)
+  self.assertEqual(lock.entries,20)
+ def test_one_secondary_burst_reduces_concurrency_once(self):
+  client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=100)
+  with patch('github_radar.github_client.time.time',return_value=1000):
+   for _ in range(20):
+    client._rate_error(HTTPError('https://api.github.com',429,'limited',{'Retry-After':'60','x-ratelimit-remaining':'4999'},io.BytesIO()),4999,2000,'/repos/a/b')
+  self.assertEqual(client.request_concurrency,50)
+ def test_hourly_quota_exhaustion_does_not_lower_connection_concurrency(self):
+  client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=100)
+  with patch('github_radar.github_client.time.time',return_value=1000):
+   client._rate_error(HTTPError('https://api.github.com',403,'limited',{'x-ratelimit-remaining':'0'},io.BytesIO()),0,2000,'/repos/a/b')
+  self.assertEqual(client.request_concurrency,100);self.assertEqual(client.retry_not_before,2000)
+
 class SharedRateCooldownTests(unittest.TestCase):
  def test_other_official_requests_wait_for_shared_retry_after(self):
   from github_radar.github_client import GitHubRateLimitError

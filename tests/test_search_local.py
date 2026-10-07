@@ -12,6 +12,20 @@ from github_radar.models import OfficialStarWeek,StarDay,StarSnapshot,Recommenda
 from tests.test_storage import repository
 
 class LocalDiscoveryTests(unittest.TestCase):
+ def test_transient_network_failure_gets_one_later_wave_without_losing_prior_evidence(self):
+  from github_radar.github_client import GitHubClient,GitHubRequestError
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(1);client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=1)
+  engine.client=client;client.core_remaining=5000;calls=[]
+  def history(name):
+   calls.append(name)
+   if len(calls)<=2:raise GitHubRequestError('temporary network timeout') from TimeoutError()
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
+  client.star_history_weeks=history
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(len(calls),3)
+  self.assertEqual(p.official_checked,1);self.assertEqual(p.pending,0)
+
  def test_secondary_limit_waits_before_quota_probe_and_retries_retained_row(self):
   from github_radar.github_client import GitHubClient,GitHubRateLimitError
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')

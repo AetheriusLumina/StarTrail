@@ -410,7 +410,7 @@ class SearchCoordinator:
                 return current,official(self.client.star_history_weeks,current.full_name),False
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='star-history') as pool:
             from collections import deque
-            exhausted=False;retry_rows=deque();needs_wait=False
+            exhausted=False;retry_rows=deque();needs_wait=False;transient_retries={}
             while not exhausted or retry_rows:
                 # Previous request wave is fully drained before any yield/wait:
                 # cooperative modules may otherwise replace the shared budget.
@@ -457,7 +457,14 @@ class SearchCoordinator:
                     except (GitHubRequestError,ValueError,OSError) as exc:
                         if isinstance(exc,GitHubRateLimitError):
                             retry_rows.append(row);needs_wait=True
-                        else:tick(limited=True,notes=(str(exc)[:300],))
+                        else:
+                            from urllib.error import URLError,HTTPError
+                            from http.client import HTTPException
+                            transient=isinstance(exc,GitHubRequestError) and (exc.status in (500,502,503,504) or (exc.status is None and not isinstance(exc.__cause__,HTTPError) and isinstance(exc.__cause__,(URLError,TimeoutError,ConnectionError,HTTPException,OSError))))
+                            if isinstance(self.client,GitHubClient) and transient and transient_retries.get(repo.id,0)<1:
+                                transient_retries[repo.id]=1;retry_rows.append(row)
+                                tick(notes=('暂时网络请求失败，保留仓库到后续波次重试；已完成证据复用',))
+                            else:tick(limited=True,notes=(str(exc)[:300],))
                 yield None,None
         measured.sort(key=lambda item:(-item[1].added,-item[2],item[0]['repo_id']))
         for row,day,_ in measured:yield row,day

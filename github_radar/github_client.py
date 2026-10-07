@@ -69,10 +69,17 @@ class GitHubClient:
         if exc.code!=429 and not (exc.code==403 and (remaining==0 or secondary)):return None
         # The shared pool stays bounded; subsequent waves and refreshes use fewer
         # workers. No retry is sent before the server's recovery time.
-        with self._quota_lock:self.request_concurrency=max(1,self.request_concurrency//2)
-        reset_at=int(time.time())+int(retry) if retry.isdecimal() else reset_at if remaining==0 else int(time.time())+60
-        reset_at=reset_at or int(time.time())+60
-        with self._quota_lock:self.retry_not_before=max(self.retry_not_before,reset_at)
+        now=time.time()
+        primary=headers.get('x-ratelimit-remaining')=='0' or (remaining==0 and reset_at is not None and not secondary)
+        reset_at=int(now)+int(retry) if retry.isdecimal() else reset_at if remaining==0 else int(now)+60
+        reset_at=reset_at or int(now)+60
+        with self._quota_lock:
+            # Many already-issued requests can report the same cooldown. One
+            # burst reduces the next wave once, rather than 100 -> 1 instantly.
+            # An hourly quota is a count limit, not evidence of excessive concurrency.
+            if not primary and now>=self.retry_not_before:
+                self.request_concurrency=max(1,self.request_concurrency//2)
+            self.retry_not_before=max(self.retry_not_before,reset_at)
         return GitHubRateLimitError(reset_at,status=exc.code,path=path)
 
     def close(self):
