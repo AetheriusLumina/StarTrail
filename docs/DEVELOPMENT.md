@@ -32,8 +32,8 @@ py -3.13 -m venv .venv
 
 | 工作 | 主要模块 |
 |---|---|
-| 候选来源、GitHub 请求 | `discovery.py`、`github_client.py`、`trending.py`、`trendshift.py` |
-| 榜单与更新规则 | `ranking.py`、`service.py`、`daily_update.py` |
+| 候选来源、GitHub 请求 | `search_sources.py`、`github_client.py`、`trending.py`、`trendshift.py`；`discovery.py` 为兼容路径 |
+| 榜单与更新规则 | `search_jobs.py`、`search_local.py`、`search_coordinator.py`、`search_ranking.py`；`service.py` / `ranking.py` 为兼容路径 |
 | 数据、历史、关注分类 | `storage.py`、`history_search.py`、`follow_folders.py` |
 | README 和翻译 | `readme_service.py`、`project_translation.py`、`translation_service.py`、`translation_worker.py` |
 | 登录与 AI | `github_account.py`、`codex_connection.py`、`ai_service.py` |
@@ -45,7 +45,7 @@ py -3.13 -m venv .venv
 
 应用以 `__main__.py` 启动，`browser_launcher.py` 打开默认浏览器，`browser_server.py` 在回环地址提供页面和 API。静态界面用原生 HTML/CSS/JavaScript；个人状态进入 `storage.py` 管理的 SQLite 与配置。服务层协调业务，来源层处理 GitHub/公开页面请求，展示层组合可阅读的数据。没有公网后台或项目自建账号服务。
 
-一次更新的主要路径：`daily_update.py` / `service.py` → `discovery.py` 获取候选 → `github_client.py` 获取公开仓库及 Star 历史 → `ranking.py` 筛选与排重 → `storage.py` 保存当天快照 → `project_translation.py` 排队预译入选项目。来源失败与预算停止需要保存可恢复状态，不能把未核实数字当成有效增长。手动与定时更新共享锁；并发点击复用活动任务。
+当前自动AI发现连接路径：`search_jobs.py` → `search_coordinator.py` / `search_local.py` → `search_sources.py` 多来源发现与 `github_client.py` 官方事实 → `search_ranking.py` 排序 → `storage.py` 两榜原子保存 → `project_translation.py` 入选项目预译。未连接或关闭自动AI的兼容路径为 `daily_update.py` / `service.py` → `discovery.py` → `ranking.py`。来源失败与预算停止需要保存可恢复状态，不能把未核实数字当成有效增长。手动与定时更新共享锁；并发点击复用活动任务。
 
 阅读已保存的分类、日期或关注项目不等于再次更新。README 由 `readme_service.py` 获取并缓存；翻译由 `translation_service.py` 管理缓存与单任务进程，`translation_worker.py` 负责 CPU 推理。详情准备需要的译文后再展示，避免结束动效后替换文字。已连接 Codex 的数据更新通过 `search_jobs.py` / `search_coordinator.py` 关键词扩词、直接公开检索和依据匹配；项目六卡解释仍由用户手动触发。结构化结果保存后再进行本地翻译。
 
@@ -149,17 +149,25 @@ README 截图集中在 `docs/images/`，展示实际使用时保存的项目与�
 9. 软件升级、失败下载清理、森林主题和图标、拖动、归类、六卡类型首行、离线翻译保持。对应回归见 test_search_local.py、test_github_transport.py、test_search_timing.py；接口细节见 AI_HANDOFF.md。
 
 
-来源覆盖状态：公开补充页记录 complete／partial／failed 与本次项目数。partial 表示页面有效但未覆盖后续目录，failed 表示该来源暂不可用；两者会在界面显示。它们不替代必须完整的官方查询与已知候选事实核算。前台增长的新仓库发现沿用 30 天窗口，旧候选仍更新和排名；全年代目录准备使用独立断点。同轮共享公开页面，下一轮重新请求。
+来源覆盖状态：公开补充页记录 complete／partial／failed 与本次项目数。partial 表示页面有效但未覆盖后续目录，failed 表示该来源暂不可用；两者会在界面显示。它们不替代官方事实；默认路径可按已核实额度范围发表，未知候选不参与并保留断点。前台增长的新仓库发现沿用 30 天窗口，旧候选仍更新和排名；全年代目录准备使用独立断点。同轮共享公开页面，下一轮重新请求。
 
 
-## 长更新、限流等待与本机留存
+## 配额边界、兼容等待与本机留存
 
 1. 新来源候选和旧元数据均使用GraphQL二十仓库批量读取，最多四个批请求并行；稳定ID核对、来源证据与当日观测仍保存。没有有效授权时保留兼容REST路径，不能冒称批量读取成功。
 2. 日增波次必须全部收取并保存结果，之后才能yield或等待配额；跨模块共享客户端不能带着未收取future切换预算。限流行保留到retry_rows，不用“已失效”跳过403/429。
-3. _wait_core_steps先等待retry_not_before，再读/rate_limit。按服务器时间等待，取消有效，恢复后读取真实remaining；后台有限预算不无限等待。网络失败或未知恢复时间保留失败原因，不能伪造额度。
+3. 默认无审核路径到配额预留线停止本轮请求，不等待下一小时；继续读同日有效日增缓存，按已核实范围准备发表。`_wait_core_steps`仅旧审核兼容路径保留：先等retry_not_before再读/rate_limit，取消有效。网络失败独立记录，不能被quota_limited掩盖。
 4. SearchJobs全局refresh与所有活动／已准备模块租约一起续期；continue_keyword也有心跳。取消、配置或日期变化的旧任务不得写新榜单。单次网络超时保留，取消整轮分钟截断不等于请求永久阻塞。
 5. 候选、来源、查询断点、关键词扩词、当日资格与已发布历史保留在SQLite；日增数含零保存最近30天，同一日有效期六小时。未完成证据可复用，新统计日仍需取得新官方事实，累计Star差值不能代替新增。
 
 ## 单轮范围回归
 
 配额截止、网络与配额混合、有效零日增、剩余缓存、GraphQL混合错误与恢复、来源取消留存、查询轮转均使用隔离确定性测试。产品动态英文状态同时运行 `python -m unittest tests.test_status_i18n` 和 `node tests/status_i18n.cjs`；浏览器交互仍运行 `node tests/browser_interaction.cjs`。单轮成功只代表已验证额度范围，不以旧版本缓存测试代替新版本首次实测。
+
+
+## 本地文件整理与交付
+
+1. Git跟踪目录是唯一活动源码；`.build/`是可重建构建和隔离验收，`.venv/`和`.tools/`是开发环境与离线模型。清理产物前确认没有对应冻结进程在运行，并保留需要的原始验收证据和公开安装包校验记录。
+2. 安装目录、UserData与备份不作为开发缓存清理。注册安装不得通过搬文件夹卸载；使用对应卸载器，缺失时记录并由用户决定处理。
+3. 本机清理清单、历史私有源码、认证资料、数据库和原始日志不提交Git；只同步当前源码、授权图片及公共用户／开发／交接文档。
+4. 文档修订不改变现有发布标签或安装包。发行附件手册是发布时快照，仓库用户手册是当前勘误版本；程序代码未改时无需伪造新版包。
