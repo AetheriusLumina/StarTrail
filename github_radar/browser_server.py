@@ -1210,6 +1210,8 @@ class BrowserServer:
             "sections": sections,
             "keyword_groups": keyword_groups,
             "search_progress": [asdict(p) for p in search_progress],
+            "active_search_progress": [asdict(p) for p in getattr(getattr(self.service,'search_jobs',None),'foreground_progress',())] if (busy or (ai_state and ai_state['kind']=='refine' and ai_state['status']=='running')) and getattr(getattr(self.service,'search_jobs',None),'foreground_active',False) else [],
+            "search_cancellable": bool((busy or (ai_state and ai_state['kind']=='refine' and ai_state['status']=='running')) and getattr(getattr(self.service,'search_jobs',None),'foreground_active',False)),
             "refresh_timing": search_store.refresh_timing(),
             "update_failure": ({"attempted_at": failure[0], "reason": tr(language, self._failure_with_account(failure[1]))}
                                if failure else None),

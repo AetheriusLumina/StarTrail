@@ -69,6 +69,26 @@ class SearchJobs:
             self._active=None;self._engines=[];search.finish_run(lease)
 
     def continue_keyword(self,keyword_id,day,*,model_id=None):
+        # A user continuation is cancellable search even though it uses the AI worker.
+        self.foreground_active=True;self.foreground_progress=[]
+        started=self.service.clock();progress=None
+        try:
+            progress=self._continued_keyword(keyword_id,day,model_id=model_id)
+            return progress
+        finally:
+            self.foreground_active=False;self.foreground_progress=[]
+            published_at=self.store.daily_updated_at(day) if progress is not None else None
+            timing={'operation':'continue_keyword','elapsed_seconds':round(max(0,self.service.clock()-started),3),
+                    'ai_seconds':progress.ai_seconds if progress else 0,
+                    'stage_seconds':progress.stage_seconds if progress else {},'status':'ok' if progress else 'error',
+                    'attempted_at':self.now().isoformat(),'published_at':published_at,
+                    'quota_scoped':bool(progress and published_at and progress.status=='partial' and progress.quota_limited)}
+            from contextlib import closing
+            with closing(self.store._connect()) as db,db:
+                db.execute("INSERT INTO settings(name,value) VALUES('search_refresh_timing',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",(json.dumps(timing),))
+            logging.getLogger(__name__).info('continuation timing %s',json.dumps(timing))
+
+    def _continued_keyword(self,keyword_id,day,*,model_id=None):
         if not self.ready():raise ValueError('请先连接Codex再继续深度检索')
         now=self.now()
         if day!=now.date().isoformat():raise ValueError('深度检索只更新今天的结果，历史记录保留')
@@ -84,7 +104,7 @@ class SearchJobs:
         try:
             scope=SearchScope('keyword',rule.id,day,None,rule.term,rule.min_stars,model)
             self._active=self.factory()
-            progress=self._active.run(scope,max_new=200,continue_search=True,cancel_event=self._event)
+            progress=self._active.run(scope,max_new=200,continue_search=True,cancel_event=self._event,on_progress=lambda p:setattr(self,'foreground_progress',[p]))
             if progress.status not in ('done','partial'):raise ValueError('；'.join(progress.notes) or '检索未完成，原结果保留')
             return progress
         finally:
@@ -92,6 +112,12 @@ class SearchJobs:
             self._active=None;search.finish_run(lease)
 
     def refresh(self,day,observed_at):
+        # Live front-end progress is linked to this invocation, never disk leftovers.
+        self.foreground_active=True;self.foreground_progress=[]
+        try:return self._recorded_refresh(day,observed_at)
+        finally:self.foreground_active=False;self.foreground_progress=[]
+
+    def _recorded_refresh(self,day,observed_at):
         """Record the whole wall clock, including readiness, AI and failed work."""
         started=self.service.clock();self.progress=[]
         result=None
@@ -105,6 +131,8 @@ class SearchJobs:
                 for progress in self.progress:
                     for stage,seconds in progress.stage_seconds.items():stages[stage]=round(stages.get(stage,0)+seconds,3)
                 timing={'elapsed_seconds':elapsed,'ai_seconds':ai_seconds,'stage_seconds':stages,'status':result.status if result else 'error','attempted_at':self.now().isoformat()}
+                timing['quota_scoped']=bool(result and result.status=='ok' and any(p.status=='partial' and p.quota_limited for p in self.progress))
+                timing['published_at']=self.store.daily_updated_at(day) if result and result.status=='ok' else None
                 from contextlib import closing
                 with closing(self.store._connect()) as db,db:
                     db.execute("INSERT INTO settings(name,value) VALUES('search_refresh_timing',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",(json.dumps(timing),))
@@ -162,6 +190,7 @@ class SearchJobs:
                         self._active=engine
                         try:latest[index]=next(iterator)
                         except StopIteration as complete:latest[index]=complete.value;done[index]=True
+                        self.foreground_progress=[p for p in latest if p is not None]
                     self._renew_leases(search,lease)
                     if any(p and p.ai_started_at and not done[i] for i,p in enumerate(latest)):time.sleep(.05)
                 self.progress=[p for p,complete in zip(latest,done) if p is not None and complete]

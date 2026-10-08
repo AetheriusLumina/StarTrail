@@ -368,13 +368,10 @@ function describeGrowth(coverage, cards) {
 
 function describeCoverage(coverage) {
   if (!coverage) return tr("覆盖范围尚未建立；该列表不能代表 GitHub 全站绝对排名。");
-  const sourceLabels = {search: "GitHub 搜索", trending: "热门项目", tracked: "已跟踪项目"};
-  const sources = (coverage.source_names || []).map((name) => tr(sourceLabels[name] || name));
-  return language === "en"
-    ? `Saved board: ${coverage.candidate_count} candidates found · ${coverage.scored_count} verified · `
-      + `Statistical date ${coverage.stat_date || tr("待建立")} · Sources ${sources.join(", ") || tr("待建立")}`
-    : `已保存榜单：来源读取 ${coverage.candidate_count} 个 · 核算（含已有候选）${coverage.scored_count} 个 · `
-      + `统计日 ${coverage.stat_date || "待建立"} · 来源 ${sources.join("、") || "待建立"}`;
+  return language === 'en'
+    ? `Verified candidates: ${coverage.scored_count} · Statistical date: ${coverage.stat_date || 'pending'} · Coverage is finite`
+    : `已核算候选 ${coverage.scored_count} 个 · 统计日 ${coverage.stat_date || '待建立'} · 覆盖范围有限`;
+
 }
 
 function renderKeywordGroups(issue) {
@@ -625,9 +622,15 @@ async function startRefine(keywordId) {
   }
 }
 
+function compactFailureReason(reason) {
+  const parts=String(reason||'').split(/[；;]/).filter(Boolean);
+  const important=parts.find(p=>/401|403|429|连接|网络|登录|权限|额度|统计|保存|取消|network|quota|auth|permission|cancel|save/i.test(p));
+  return localizeServerText((important||parts[0]||reason||'').slice(0,180));
+}
+
 function renderIssue(issue) {
   latestIssue = issue;
-  if(!issue.busy&&issue.update_failure)softwareUpdates?.notifyFailure({...issue.update_failure,reason:localizeServerText(issue.update_failure.reason)});
+  if(!issue.busy&&issue.update_failure)softwareUpdates?.notifyFailure({...issue.update_failure,reason:compactFailureReason(issue.update_failure.reason)});
   const growth = issue.sections.find((section) => section.id === "growth") || { cards: [] };
   const keyword = issue.sections.find((section) => section.id === "keyword") || { cards: [] };
   const busy = Boolean(issue.busy || issue.ai_busy);
@@ -662,32 +665,29 @@ function renderIssue(issue) {
   for (const group of issue.keyword_groups || [])
     if (group.cards.length < 5) shortage.push(language === "en"
       ? `“${group.term}” has ${group.cards.length} of 5 projects` : `「${group.term}」目前 ${group.cards.length} 个，不足 5 个`);
-  const stages={waiting_quota:'等待 GitHub 额度恢复',expanding:'扩展关键词',searching:'AI 联网搜索',collecting:'收集多来源候选',preparing:'准备资料',measuring:'核算官方日增',checking:'AI 统一分析候选库',matching:'匹配检索依据',prepared:'等待整份保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
-  const stageEn={waiting_quota:'Waiting for GitHub quota reset',expanding:'Expanding terms',searching:'AI web search',collecting:'Collecting candidates',preparing:'Preparing evidence',measuring:'Measuring daily Stars',checking:'Analyzing merged candidates',matching:'Matching queries',prepared:'Waiting for atomic save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
-  byId('search-cancel').hidden=!(issue.search_progress||[]).some(p=>(p.status==='running'||p.status==='ready'));
-  if(byId('search-cancel').hidden)byId('search-cancel').disabled=false;
-  const timingText=p=>{
-    const elapsed=p.status==='running'&&p.started_at?Math.max(Number(p.elapsed_seconds)||0,(Date.now()-Date.parse(p.started_at))/1000):Number(p.elapsed_seconds)||0;
-    const seconds=value=>`${Math.max(0,Math.round(value||0))}s`;
-    const activeAI=p.status==='running'&&p.ai_started_at?(Date.now()-Date.parse(p.ai_started_at))/1000:0;
-    const ai=(Number(p.ai_seconds)||0)+(Number.isFinite(activeAI)?Math.max(0,activeAI):0);
-    const phases=p.stage_seconds||{};
-    const slowest=Object.keys(phases).sort((a,b)=>phases[b]-phases[a])[0];
-    return language==='en'?`elapsed ${seconds(elapsed)}, AI ${seconds(ai)}${slowest?`, ${stageEn[slowest]||slowest} ${seconds(phases[slowest])}`:''}`:
-      `已用时 ${seconds(elapsed)}，AI ${seconds(ai)}${slowest?`，${stages[slowest]||slowest} ${seconds(phases[slowest])}`:''}`;
-  };
-  const analysisText=p=>p.section==='keyword'&&p.search_mode==='discovery'?(language==='en'?`query matches ${p.matched_count||0}; no AI audit`:`检索匹配 ${p.matched_count||0}；无 AI 审核`):p.section==='growth'?(language==='en'?`officially measured ${p.official_checked||0}`:`官方已核算 ${p.official_checked||0}`):
-    (language==='en'?`AI submitted ${p.newly_checked}, completed ${p.checked_completed||0}`:`AI 已提交 ${p.newly_checked}，已完成 ${p.checked_completed||0}`);
-  const progress=(issue.search_progress||[]).filter(p=>p.status==='running'||p.status==='partial'||p.status==='paused').sort((a,b)=>Number(b.status==='running')-Number(a.status==='running')).map(p=>
-    language==='en'?`${p.section}: ${p.status==='partial'&&p.quota_limited?'quota scope complete':stageEn[p.stage]||p.stage} · read ${p.collected}, candidate library ${p.candidate_pool||p.unique||0}, ${analysisText(p)}, cache ${p.cache_hits}, pending ${p.pending}, metadata pending ${p.metadata_pending||0} · ${timingText(p)}`:
-    `${p.section==='growth'?'增长榜':issue.keywords.find(k=>k.id===p.keyword_id)?.term||'关键词'}：${p.status==='partial'&&p.quota_limited?'额度范围完成':stages[p.stage]||p.stage} · 读取 ${p.collected}，候选库 ${p.candidate_pool||p.unique||0}，${analysisText(p)}，缓存 ${p.cache_hits}，待处理 ${p.pending}，元数据待处理 ${p.metadata_pending||0} · ${timingText(p)}`);
-  if(issue.busy&&progress.length)setStatus(progress.join(" · "), "busy");
-  const total=issue.refresh_timing;
-  const summary=!issue.busy&&total?(language==='en'?`Last complete attempt: ${total.elapsed_seconds}s wall clock, ${total.ai_seconds}s cumulative AI calls (may overlap).`:`上次整次尝试：总用时 ${total.elapsed_seconds} 秒，AI 累计 ${total.ai_seconds} 秒（并行可重叠）。`):'';
-  const coverageNotes=(issue.search_progress||[]).flatMap(p=>Object.entries(p.source_status||{}).filter(([,value])=>value.status!=='complete').map(([source,value])=>
-    language==='en'?`${source}: ${value.status==='partial'?'partial public coverage':'source unavailable'} (${value.count||0} repositories)`:
-    `${source}：${value.status==='partial'?'公开范围未覆盖完整':'来源暂不可用'}（${value.count||0} 个项目）`));
-  byId("issue-notes").textContent = [...new Set([...progress,...coverageNotes,summary,...(issue.notes || []).map(localizeServerText), ...shortage])].join(" · ");
+  // Only foreground refresh owns the user's progress line. Background preparation
+  // and old module generations remain available in the developer diagnostics.
+  const stages={waiting_quota:'等待GitHub额度',expanding:'准备关键词',collecting:'收集项目',
+    measuring:'核算官方日增',matching:'匹配关键词',prepared:'准备保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+  const stagesEn={waiting_quota:'Waiting for GitHub quota',expanding:'Preparing keywords',collecting:'Collecting projects',
+    measuring:'Measuring daily Star growth',matching:'Matching keywords',prepared:'Preparing to save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  const active=(issue.active_search_progress||[]).filter(p=>p.status==='running').sort((a,b)=>String(b.started_at||'').localeCompare(String(a.started_at||'')))[0];
+  if((issue.busy||issue.search_cancellable)&&active){
+    const label=active.section==='growth'?(language==='en'?'Star growth':'增长榜'):
+      issue.keywords.find(k=>k.id===active.keyword_id)?.term||(language==='en'?'Keywords':'关键词');
+    const elapsed=active.started_at?Math.max(active.elapsed_seconds||0,(Date.now()-Date.parse(active.started_at))/1000):active.elapsed_seconds||0;
+    const stage=(language==='en'?stagesEn:stages)[active.stage]||(language==='en'?'Updating':'正在更新');
+    const measured=active.section==='growth'?active.official_checked||0:active.matched_count||0;
+    const detail=active.stage==='measuring'||active.stage==='matching'?
+      (language==='en'?` · checked ${measured} · pending ${active.pending||0}`:` · 已核算 ${measured} · 待处理 ${active.pending||0}`):'';
+    setStatus(`${label}：${stage}${detail} · ${Math.round(Math.max(0,elapsed))}${language==='en'?'s':'秒'}`, 'busy');
+  }
+  byId('search-cancel').hidden=!issue.search_cancellable;
+  byId('search-cancel').disabled=quitting||!issue.search_cancellable;
+  const scoped=issue.status!=='error'&&!issue.update_failure&&issue.refresh_timing?.status==='ok'&&issue.refresh_timing?.quota_scoped===true&&issue.refresh_timing?.published_at===issue.updated_at;
+  const scopeNote=!issue.busy&&!issue.search_cancellable&&scoped?(language==='en'?'quota scope complete; remaining candidates continue next time.':'本轮额度范围完成，剩余候选下次继续。'):'';
+  // Never render raw source names, repository failures or old phase timings here.
+  byId('issue-notes').textContent=[scopeNote,...shortage.slice(0,2)].filter(Boolean).join(' · ');
   if (pollTimer) clearTimeout(pollTimer);
   if (busy && !quitting) pollTimer = setTimeout(loadIssue, 1200);
   translatePage();

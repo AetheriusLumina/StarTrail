@@ -649,7 +649,7 @@ async function testCompactReturningGrowthAndSidebar() {
 
 async function testQuotaScopeRemainsVisibleAfterReload() {
   const app=scenario();await flush();
-  app.setIssue({search_progress:[{section:'growth',status:'partial',stage:'complete',quota_limited:true,collected:6000,candidate_pool:15000,official_checked:4990,pending:4010,metadata_pending:12,cache_hits:0}]});
+  app.setIssue({updated_at:'2026-10-08T10:00:00Z',refresh_timing:{status:'ok',quota_scoped:true,published_at:'2026-10-08T10:00:00Z',attempted_at:'2026-10-08T10:00:01Z'},search_progress:[{section:'growth',status:'partial',stage:'complete',quota_limited:true,started_at:'2026-10-08T09:58:00Z',elapsed_seconds:20,collected:6000,candidate_pool:15000,official_checked:4990,pending:4010,metadata_pending:12,cache_hits:0}]});
   await vm.runInContext('loadIssue()',app.context);
   assert(app.node('issue-notes').textContent.includes('额度范围完成'));
   vm.runInContext("language='en'",app.context);
@@ -1166,5 +1166,33 @@ async function testMainPageTransitionsAndSavedKeywordSwitch(){
   await testLanguageAndFontChoicePersistsInInterface();
   await testDetailWaitsForPreparedReadmeAndTranslation();
   await testReadmeReplacementWaitsWithoutChangingVisibleText();
+  const shortApp=scenario();
+  shortApp.setIssue({busy:false,updated_at:'2026-10-08T01:03:33+08:00',
+    notes:Array.from({length:100},(_,i)=>`仓库 owner/repo${i} 未找到或无访问权限，已跳过`),
+    search_progress:[{section:'growth',status:'running',stage:'collecting',candidate_pool:55000}],
+    refresh_timing:{elapsed_seconds:968.744,ai_seconds:0,status:'ok'}});
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert(!shortApp.node('issue-notes').textContent.includes('owner/repo'), 'Raw repository diagnostics must stay out of the user summary');
+  assert(!shortApp.node('issue-notes').textContent.includes('968.744'), 'Old timing must not masquerade as the current task');
+  assert(!shortApp.node('issue-notes').textContent.includes('收集多来源'), 'Background preparation must not appear as foreground refresh');
+  shortApp.node('search-cancel').hidden=true;
+  shortApp.setIssue({busy:true,search_cancellable:true,active_search_progress:[{section:'growth',status:'running',stage:'measuring',official_checked:1892,pending:12358,elapsed_seconds:321,started_at:'2026-10-08T09:00:00+08:00'}]});
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert(shortApp.node('status-text').textContent.includes('1892'));
+  assert.equal(shortApp.node('search-cancel').hidden,false,'Foreground refresh must remain cancellable');
+  assert(shortApp.node('status-text').textContent.length<150, 'Progress should be a readable short message');
+  vm.runInContext("language='en'",shortApp.context);
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert(!/[\u4e00-\u9fff]/.test(shortApp.node('issue-notes').textContent));
+  shortApp.setIssue({busy:false,ai_busy:true,search_cancellable:true,active_search_progress:[{section:'keyword',status:'running',stage:'matching',matched_count:27,pending:3,elapsed_seconds:5}]});
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert.equal(shortApp.node('search-cancel').hidden,false,'User continuation must be cancellable');
+  assert(shortApp.node('status-text').textContent.includes('27'),'Continuation shows its own progress');
+  shortApp.setIssue({busy:true,search_cancellable:false,active_search_progress:[],search_progress:[{section:'growth',status:'running',stage:'measuring',official_checked:99999}]});
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert(!shortApp.node('status-text').textContent.includes('99999'),'Unrelated persisted jobs are not current progress');
+  shortApp.setIssue({busy:false,status:'error',refresh_timing:{status:'ok',quota_scoped:true,published_at:shortApp.context.latestIssue?.updated_at}});
+  await vm.runInContext('loadIssue()',shortApp.context);
+  assert(!shortApp.node('issue-notes').textContent.includes('quota scope complete'),'Failure cannot be called quota completion');
   console.log("Browser interaction tests passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

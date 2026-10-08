@@ -12,6 +12,7 @@ from .search_types import QueryExpansion, ObservedRepository, GrowthAssessment, 
 def initialize_search_schema(db):
     # Individual statements keep migration inside RadarStore's existing transaction.
     for statement in (
+        'CREATE TABLE IF NOT EXISTS search_publication_log(id INTEGER PRIMARY KEY,published_at TEXT NOT NULL,payload TEXT NOT NULL)',
         'CREATE TABLE IF NOT EXISTS query_expansions (scope_key TEXT PRIMARY KEY,payload TEXT NOT NULL)',
         'CREATE TABLE IF NOT EXISTS search_readmes(repo_id INTEGER PRIMARY KEY,fetched_at TEXT NOT NULL,excerpt TEXT,limited INTEGER NOT NULL)',
         """CREATE TABLE IF NOT EXISTS search_candidates (scope_key TEXT NOT NULL,
@@ -327,6 +328,24 @@ class SearchStore:
             if cancel_event and cancel_event.is_set():raise ValueError('检索已取消，结果未发布')
             self.store.commit_daily(scope.local_date,accepted,snapshots,recommendations,
                 completed_at=now.isoformat(),completed_sections=[(scope.section,scope.keyword_id)],growth_coverage=value.coverage,_connection=db)
+            # Capture the selected facts in the same transaction as the issue.
+            # Later cache/source changes must not rewrite the publication record.
+            observed={o.repo.id:o for o in value.observations}
+            selected=[]
+            for recommendation in recommendations:
+                item=asdict(recommendation)
+                observation=observed.get(recommendation.repo_id)
+                item['stars']=observation.repo.stars if observation else None
+                cached=db.execute('SELECT stat_date,rule,added,fetched_at FROM search_star_days WHERE repo_id=? AND stat_date=?',
+                    (recommendation.repo_id,scope.stat_date)).fetchone() if scope.stat_date else None
+                item['official_cache_at_publication']=dict(cached) if cached else None
+                item['matches']=[dict(r) for r in db.execute('SELECT term,kind,content_hash,observed_at FROM search_matches WHERE scope_key=? AND repo_id=?',
+                    (scope_key(scope),recommendation.repo_id))]
+                selected.append(item)
+            record={'published_at':now.isoformat(),'scope':asdict(scope),'coverage':asdict(value.coverage) if value.coverage else None,'selected':selected}
+            db.execute('INSERT INTO search_publication_log(published_at,payload) VALUES(?,?)',
+                (now.isoformat(),json.dumps(record,ensure_ascii=False)))
+
 
     def publish_all(self,values,leases,*,now=None,cancel_event=None,refresh_lease=None):
         if len(values)!=len(leases) or not values:raise ValueError('榜单整份提交范围无效')

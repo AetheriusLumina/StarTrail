@@ -39,6 +39,10 @@ class SearchJobsTests(unittest.TestCase):
         service=RadarService(SimpleNamespace(),self.store);extra=[]
         def engine():
             def run(scope,**kw):
+                self.assertTrue(jobs.foreground_active)
+                progress=SearchProgress('job','keyword',scope.keyword_id,scope.local_date,status='running')
+                kw['on_progress'](progress)
+                self.assertEqual(jobs.foreground_progress,[progress])
                 extra.append((scope,kw));return SearchProgress('job','keyword',scope.keyword_id,scope.local_date,status='partial')
             return SimpleNamespace(run=run,provider=SimpleNamespace(cancel=lambda:None))
         jobs=SearchJobs(service,self.store,engine,now=lambda:self.now)
@@ -46,6 +50,22 @@ class SearchJobsTests(unittest.TestCase):
         self.assertEqual(result.status,'partial');self.assertEqual(len(extra),1)
         self.assertEqual(extra[0][0].model_id,'chosen');self.assertTrue(extra[0][1]['continue_search'])
         self.assertEqual(extra[0][1]['max_new'],200)
+        self.assertFalse(jobs.foreground_active)
+        self.assertEqual(jobs.foreground_progress,[])
+
+    def test_failed_continuation_invalidates_old_quota_success(self):
+        from contextlib import closing
+        import json
+        from github_radar.search_storage import SearchStore
+        jobs=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,self.engine,ready=lambda:False,now=lambda:self.now)
+        with closing(self.store._connect()) as db,db:
+            db.execute("INSERT INTO settings(name,value) VALUES('search_refresh_timing',?)",(json.dumps({'status':'ok','quota_scoped':True,'published_at':'old'}),))
+        with self.assertRaises(ValueError):jobs.continue_keyword(self.a.id,self.now.date().isoformat())
+        timing=SearchStore(self.store).refresh_timing()
+        self.assertEqual(timing['status'],'error')
+        self.assertFalse(timing['quota_scoped'])
+        self.assertIsNone(timing['published_at'])
+        self.assertFalse(jobs.foreground_active)
 
     def test_growth_then_keywords_all_automatic_and_yesterday_utc(self):
         service=RadarService(SimpleNamespace(),self.store)

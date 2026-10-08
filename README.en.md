@@ -15,6 +15,8 @@ Finding an interesting repository is only the beginning: understanding what it i
 
 **Navigation:** [Get started](#download-and-get-started) · [The story](#how-this-project-started) · [Features](#features-and-interface) · [Data and privacy](#data-and-privacy) · [Development](#development-and-contributions) · [Limitations](#limitations-and-next-directions) · [License](#license-and-thanks)
 
+I keep the page focused on the current update stage, essential counts, save time, and actionable failures. Detailed source and processing records stay in local developer diagnostics.
+
 ## Download and get started
 
 No Python, Node.js, or development tools are needed to use the installer.
