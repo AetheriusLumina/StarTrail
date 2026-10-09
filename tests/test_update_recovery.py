@@ -69,9 +69,10 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertIsNone(client.core_remaining)
 
     def test_active_quota_reset_is_not_ignored(self):
+        from tests.test_github_client import FakeResponse
         rule=self.store.add_keyword('skills',1000)
         scope=SearchScope('keyword',rule.id,self.day,None,'skills',1000,'model')
-        client=GitHubClient();client.core_remaining=client.search_remaining=0
+        client=GitHubClient(opener=lambda *a,**kw:FakeResponse({'resources':{resource:{'remaining':0,'limit':5000 if resource=='core' else 30,'reset':int(self.now.timestamp()+3600)} for resource in ('core','search')}}));client.core_remaining=client.search_remaining=0
         client.core_reset_at=client.search_reset_at=self.now.timestamp()+3600
         source=SimpleNamespace(collected=0,notes=[],limited=False,trendshift=None)
         def collect(scope,expansion,result,budget,event,progress):

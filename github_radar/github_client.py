@@ -52,6 +52,8 @@ class GitHubClient:
         self.search_reset_at: int | None = None
         self.budget, self.clock = budget, clock
         self._last_headers = {}
+        self.rate_limit_observations = {}
+        self.last_rate_limit = None
         self._quota_lock = RLock()
         self._auth_recovery_lock = RLock()
         self._auth_epoch = 0
@@ -80,7 +82,43 @@ class GitHubClient:
             if not primary and now>=self.retry_not_before:
                 self.request_concurrency=max(1,self.request_concurrency//2)
             self.retry_not_before=max(self.retry_not_before,reset_at)
+        self.last_rate_limit={'status':exc.code,'resource':headers.get('x-ratelimit-resource'),'remaining':self._header_int(headers.get('x-ratelimit-remaining')),'reset_at':reset_at,'secondary':not primary,'observed_at':int(now)}
         return GitHubRateLimitError(reset_at,status=exc.code,path=path)
+
+    def reconcile_quota(self,budget,resource):
+        """Confirm estimated exhaustion using GitHub's quota-free status endpoint.
+
+        This request never changes the shared client budget binding. A failed or
+        malformed check is a real failure, never evidence of exhausted quota.
+        """
+        timeout=min(20,budget.deadline-self.clock())
+        if timeout<=0:raise GitHubRequestError('GitHub额度检查超时，已保留上次结果')
+        request=Request(self.BASE_URL+'/rate_limit',headers={'User-Agent':'StarTrail','Accept':'application/vnd.github+json',**self._authorization()})
+        try:
+            with self._open_authenticated(request,timeout) as response:
+                raw=response.read(MAX_RESPONSE_BYTES+1)
+                if len(raw)>MAX_RESPONSE_BYTES:raise ValueError('oversized quota response')
+            data=json.loads(raw.decode('utf-8'))['resources'][resource]
+            remaining,reset,limit=data['remaining'],data['reset'],data['limit']
+            if any(type(v) is not int or v<0 for v in (remaining,reset,limit)):raise ValueError('invalid quota values')
+        except GitHubRateLimitError:
+            # A previously recorded server cooldown is also a confirmed stop.
+            with budget._lock:setattr(budget,resource+'_remaining',0)
+            if budget.quota_event is not None:budget.quota_event.set()
+            return
+        except HTTPError as exc:
+            limited=self._rate_error(exc,None,None,'/rate_limit')
+            if limited:
+                with budget._lock:setattr(budget,resource+'_remaining',0)
+                if budget.quota_event is not None:budget.quota_event.set()
+                return
+            raise GitHubRequestError('GitHub额度检查失败（HTTP '+str(exc.code)+'）',status=exc.code) from exc
+        except (URLError,OSError,HTTPException,ValueError,KeyError,TypeError) as exc:
+            raise GitHubRequestError('无法确认GitHub实际剩余额度，已保留上次结果') from exc
+        with budget._lock:
+            setattr(budget,resource+'_remaining',remaining);budget._resets[resource]=reset
+        setattr(self,resource+'_remaining',remaining);setattr(self,resource+'_reset_at',reset)
+        self.rate_limit_observations[resource]={'remaining':remaining,'limit':limit,'reset_at':reset,'observed_at':int(time.time()),'verified_by':'/rate_limit'}
 
     def close(self):
         if self._transport:self._transport.close()
@@ -211,8 +249,11 @@ class GitHubClient:
                 raw=response.read(MAX_RESPONSE_BYTES+1)
                 if len(raw)>MAX_RESPONSE_BYTES:raise GitHubRequestError('GitHub批量响应超过大小限制')
             body=json.loads(raw.decode('utf-8'))
-            if isinstance(body,dict) and any(isinstance(e,dict) and e.get('type')=='RATE_LIMITED' for e in (body.get('errors') or ())):
-                if not all(isinstance(e,dict) and e.get('type')=='RATE_LIMITED' for e in body['errors']):raise GitHubRequestError('GitHub批量元数据存在独立错误；未当作额度范围成功')
+            def rate_error(error):
+                return isinstance(error,dict) and (error.get('type')=='RATE_LIMITED' or (error.get('type')=='RATE_LIMIT' and error.get('code')=='graphql_rate_limit'))
+            if isinstance(body,dict) and any(rate_error(e) for e in (body.get('errors') or ())):
+                if not all(rate_error(e) for e in body['errors']):raise GitHubRequestError('GitHub批量元数据存在独立错误；未当作额度范围成功')
+                self.last_rate_limit={'status':200,'resource':'graphql','remaining':self.graphql_remaining,'reset_at':self.graphql_reset_at,'secondary':False,'observed_at':int(time.time()),'code':'graphql_rate_limit'}
                 raise GitHubRateLimitError(self.graphql_reset_at,path='/graphql')
             if not isinstance(body,dict) or not isinstance(body.get('data'),dict):raise GitHubRequestError('GitHub批量元数据未完整返回；未当作成功')
             aliases={'r'+str(i) for i in range(len(names))}
@@ -447,6 +488,11 @@ class GitHubClient:
             self.remaining = self._header_int(lowered.get("x-ratelimit-remaining"))
             self.reset_at = self._header_int(lowered.get("x-ratelimit-reset"))
             resource = lowered.get("x-ratelimit-resource") or ("search" if path.startswith("/search/") else "core")
+            self.rate_limit_observations[resource]={
+                'remaining':self._header_int(lowered.get('x-ratelimit-remaining')),
+                'limit':self._header_int(lowered.get('x-ratelimit-limit')),
+                'reset_at':self._header_int(lowered.get('x-ratelimit-reset')),
+                'observed_at':int(time.time())}
             if self.budget is not None and resource in ("core", "search"):
                 self.remaining = getattr(self.budget, resource + "_remaining")
             if resource == "core":

@@ -11,6 +11,15 @@ from datetime import datetime,timedelta,timezone
 from .search_storage import SearchStore
 from .search_types import SearchScope
 
+def failure_summary(progress):
+    """Show the actionable terminal cause; keep source counts in diagnostics."""
+    auxiliary=('另一榜单未完成','实际读取','来源顺序','公开活动样本','主题首批','网站 AI','本轮请求额度','GitHub实际请求额度','仓库未找到或无访问权限')
+    failures=[p for p in progress if p.status not in ('done','partial')]
+    for item in reversed(failures):
+        for note in reversed(item.notes):
+            if note and not note.startswith(auxiliary):return note[:180]
+    return '没有完成可核实榜单的保存，请查看开发诊断中的失败原因'
+
 class SearchJobs:
     def __init__(self,service,store,coordinator_factory,*,ready=lambda:True,model=None,now=None):
         self.service,self.store,self.factory=service,store,coordinator_factory
@@ -143,6 +152,8 @@ class SearchJobs:
                     for stage,seconds in progress.stage_seconds.items():stages[stage]=round(stages.get(stage,0)+seconds,3)
                 timing={'elapsed_seconds':elapsed,'ai_seconds':ai_seconds,'stage_seconds':stages,'status':result.status if result else 'error','attempted_at':self.now().isoformat()}
                 timing['quota_scoped']=bool(result and result.status=='ok' and any(p.status=='partial' and p.quota_limited for p in self.progress))
+                timing['github_limits']=dict(getattr(self.service.client,'rate_limit_observations',{}))
+                timing['github_rate_limit']=getattr(self.service.client,'last_rate_limit',None)
                 timing['published_at']=self.store.daily_updated_at(day) if result and result.status=='ok' else None
                 from contextlib import closing
                 with closing(self.store._connect()) as db,db:
@@ -266,7 +277,7 @@ class SearchJobs:
         if len(self.progress)<len(scopes):notes+=('检索提前停止，未执行的模块尚未更新；已保存结果保留',)
         interrupted=len(self.progress)<len(scopes) or any(p.status not in ('done','partial') for p in self.progress)
         failed_notes=tuple(note for p in self.progress if p.status not in ('done','partial') for note in p.notes)
-        failure_detail='；'.join((failed_notes or notes)[:3])[:500]
+        failure_detail=failure_summary(self.progress) if interrupted else ''
         failure_message='检索未完成，已保留上次结果'+('：'+failure_detail if failure_detail else '')
         result=self.service._result(day,self.store.daily_recommendations(day),'partial' if successful and interrupted else 'ok' if successful else 'error',
             not successful,('部分更新未完成，已保留已保存结果：'+failure_detail) if successful and interrupted else '本轮额度范围更新成功；未处理候选和检索断点保留，下次更新继续' if successful and partial else '更新已完成' if successful else failure_message,notes)

@@ -61,6 +61,7 @@ class SearchCoordinator:
         self.now=now or (lambda:datetime.now().astimezone());self.clock=clock
         self.search=SearchStore(store)
         self.sources=sources or SearchSources(client,store,None,None,clock)
+        if isinstance(self.sources,SearchSources):self.sources.now=self.now
         self.owner=uuid.uuid4().hex
         self.legacy_review=legacy_review
 
@@ -109,6 +110,10 @@ class SearchCoordinator:
                 if self._active_budget is not None:
                     # Another module may have consumed quota since this yield.
                     for resource in ('core','search'):
+                        raw=getattr(self.client,'rate_limit_observations',{}).get(resource,{})
+                        reset=raw.get('reset_at');previous=self._active_budget._resets.get(resource)
+                        if reset is not None and previous is not None and reset>previous:
+                            self._active_budget.observe({'x-ratelimit-resource':resource,'x-ratelimit-remaining':str(raw['remaining']),'x-ratelimit-reset':str(reset)})
                         remaining=getattr(self.client,resource+'_remaining',None)
                         known=getattr(self._active_budget,resource+'_remaining')
                         if remaining is not None:setattr(self._active_budget,resource+'_remaining',remaining if known is None else min(remaining,known))
@@ -396,7 +401,8 @@ class SearchCoordinator:
                 from http.client import HTTPException
                 for attempt in range(2):
                     if event.is_set():raise GitHubRequestError('检索已取消')
-                    if getattr(self.client,'budget',None) is not budget:budget.spend('core',1,self.clock())
+                    if isinstance(self.client,GitHubClient):self.client.budget=budget
+                    elif getattr(self.client,'budget',None) is not budget:budget.spend('core',1,self.clock())
                     try:return call(*args)
                     except GitHubRequestError as exc:
                         # Retry one idempotent read after a dropped connection;
@@ -417,14 +423,16 @@ class SearchCoordinator:
                 return current,official(self.client.star_history_weeks,current.full_name),False
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='star-history') as pool:
             from collections import deque
-            exhausted=False;retry_rows=deque();needs_wait=False;quota_stop=False;transient_retries={};unrecovered=set()
+            exhausted=False;retry_rows=deque();needs_wait=False;quota_stop=False;server_limited=False;transient_retries={};unrecovered=set()
             while not exhausted or retry_rows:
                 # Previous request wave is fully drained before any yield/wait:
                 # cooperative modules may otherwise replace the shared budget.
                 if needs_wait:
                     if not self.legacy_review and self.clock()<budget.deadline:
+                        if not server_limited and budget.core_remaining!=0 and not (budget.quota_event is not None and budget.quota_event.is_set()):
+                            tick(limited=True,failed=True,notes=('GitHub未返回可确认的剩余额度，检索未完成；已保留上次结果',));break
                         quota_stop=True
-                        tick(limited=True,quota_limited=True,notes=('本轮请求额度已到预留线；未处理候选和检索断点保留，下次更新继续',))
+                        tick(limited=True,quota_limited=True,notes=('GitHub实际请求额度已耗尽或已返回限流；本轮采集结束，未处理候选和检索断点保留，下次更新继续',))
                         # No more network waves or Python scan of every pending ID.
                         # Retain all still-valid disk evidence for this ranking.
                         for cached_row,cached_day in self.search.cached_growth(scope,self.now()):
@@ -483,7 +491,7 @@ class SearchCoordinator:
                         if isinstance(exc,GitHubRateLimitError) or (budget.quota_event is not None and budget.quota_event.is_set() and (isinstance(exc,RequestBudgetExceeded) or isinstance(exc.__cause__,RequestBudgetExceeded))):
                             # Already queued workers may be refused after a sibling
                             # latches the quota stop. That is not a network failure.
-                            retry_rows.append(row);needs_wait=True
+                            retry_rows.append(row);needs_wait=True;server_limited=True
                             if budget.quota_event is not None:budget.quota_event.set()
                         else:
                             from urllib.error import URLError,HTTPError

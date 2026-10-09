@@ -73,38 +73,56 @@ class RequestBudget:
     core_remaining: int | None
     search_remaining: int | None
     deadline: float
-    core_reserve: int = 10
+    core_reserve: int = 0
     quota_event: object = field(default=None, repr=False, compare=False)
+    quota_refresh: object = field(default=None, repr=False, compare=False)
+    _refresh_lock: object = field(default_factory=RLock, repr=False, compare=False)
+    _resets: dict = field(default_factory=dict, repr=False, compare=False)
+    _confirmed_empty: set = field(default_factory=set, repr=False, compare=False)
     _core_probe: bool = False
     _search_probe: bool = False
     _lock: object = field(default_factory=RLock, repr=False, compare=False)
 
+    def _can_spend_locked(self,resource,cost,now):
+        if self.quota_event is not None and self.quota_event.is_set():return False
+        if isinstance(cost,bool) or cost<1 or now>=self.deadline:return False
+        if resource=='external':return True
+        if resource not in ('core','search'):raise ValueError('未知请求额度类型')
+        remaining=getattr(self,resource+'_remaining')
+        if remaining is None:return cost==1 and not getattr(self,'_'+resource+'_probe')
+        return remaining-cost>=(self.core_reserve if resource=='core' else 0)
+
     def can_spend(self, resource: str, cost: int, now: float) -> bool:
         with self._lock:
-            if self.quota_event is not None and self.quota_event.is_set():return False
-            if isinstance(cost, bool) or cost < 1 or now >= self.deadline:
-                return False
-            if resource == "external":
-                return True
-            if resource not in ("core", "search"):
-                raise ValueError("未知请求额度类型")
-            remaining = getattr(self, resource + "_remaining")
-            if remaining is None:
-                return cost == 1 and not getattr(self, "_" + resource + "_probe")
-            reserve = self.core_reserve if resource == "core" else 0
-            return remaining - cost >= reserve
+            allowed=self._can_spend_locked(resource,cost,now)
+            refresh=(not allowed and resource in ('core','search') and now<self.deadline
+                and getattr(self,resource+'_remaining')==0 and self.core_reserve==0
+                and self.quota_refresh is not None and resource not in self._confirmed_empty
+                and not (self.quota_event is not None and self.quota_event.is_set()))
+        if not refresh:return allowed
+        # Never hold the budget lock during network IO: response capture takes
+        # the client quota lock before observe(). Refresh is single-flight.
+        with self._refresh_lock:
+            with self._lock:
+                needed=(getattr(self,resource+'_remaining')==0 and resource not in self._confirmed_empty
+                    and not (self.quota_event is not None and self.quota_event.is_set()))
+            if needed:
+                self.quota_refresh(self,resource)
+                with self._lock:
+                    if getattr(self,resource+'_remaining')==0:self._confirmed_empty.add(resource)
+            with self._lock:return self._can_spend_locked(resource,cost,now)
 
     def spend(self, resource: str, cost: int, now: float) -> None:
-        with self._lock:
-            if not self.can_spend(resource, cost, now):
-                raise RequestBudgetExceeded("请求预算或更新时间已到限制")
-            if resource == "external":
+        while True:
+            if not self.can_spend(resource,cost,now):raise RequestBudgetExceeded('请求预算或更新时间已到限制')
+            with self._lock:
+                # A competing request can reserve the last unit between checks.
+                if not self._can_spend_locked(resource,cost,now):continue
+                if resource=='external':return
+                field=resource+'_remaining'
+                if getattr(self,field) is None:setattr(self,'_'+resource+'_probe',True)
+                else:setattr(self,field,getattr(self,field)-cost)
                 return
-            field = resource + "_remaining"
-            if getattr(self, field) is None:
-                setattr(self, "_" + resource + "_probe", True)
-            else:
-                setattr(self, field, getattr(self, field) - cost)
 
     def observe(self, headers) -> None:
         with self._lock:
@@ -112,10 +130,18 @@ class RequestBudget:
             resource = headers.get("x-ratelimit-resource")
             value = headers.get("x-ratelimit-remaining", "")
             if resource in ("core", "search") and value.isdecimal():
+                reset=headers.get('x-ratelimit-reset','')
+                reset=int(reset) if reset.isdecimal() else None
+                previous=self._resets.get(resource)
+                if previous is not None and reset is not None and reset<previous:return
                 current = getattr(self, resource + "_remaining")
-                setattr(self, resource + "_remaining", int(value) if current is None else min(current, int(value)))
+                renewed=previous is not None and reset is not None and reset>previous
+                setattr(self, resource + "_remaining", int(value) if current is None or renewed else min(current, int(value)))
+                if reset is not None:self._resets[resource]=reset
+                if renewed or int(value)>0:self._confirmed_empty.discard(resource)
 
     def reset_identity(self):
         with self._lock:
             self.core_remaining = self.search_remaining = None
             self._core_probe = self._search_probe = False
+            self._resets.clear();self._confirmed_empty.clear()

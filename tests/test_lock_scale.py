@@ -186,6 +186,8 @@ class LockAndScaleTests(unittest.TestCase):
                 return super().spend(*a)
         client=GitHubClient(request_concurrency=2)
         def rate_limited(*a):
+            # Simulate the real client's charge at the HTTP boundary.
+            client.budget.spend('core',1,0)
             if not second_entered.wait(3):raise AssertionError('second worker did not start')
             raise GitHubRateLimitError('rate limited')
         client.star_history_weeks=rate_limited

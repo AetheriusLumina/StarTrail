@@ -219,7 +219,7 @@ class ServiceTests(unittest.TestCase):
                            "2026-09-25T08:00:00+08:00")])
         trending = repo(101, 9000)
         client = FakeClient(
-            repository_updates=[repo(100, 1400), trending], core_remaining=12,
+            repository_updates=[repo(100, 1400), trending], core_remaining=2,
             histories={leader.full_name: [StarDay("2026-09-25", 90)]},
         )
         result = RadarService(client, self.store, FakeTrending([trending.full_name])).refresh(
@@ -403,18 +403,18 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("Trending", " ".join(result.notes))
         self.assertNotIn("trending", result.growth_coverage.source_names)
 
-    def test_core_reserve_limits_history_checks_and_unchecked_are_not_zero(self):
+    def test_public_refresh_uses_available_core_quota_without_reserve(self):
         candidates = [repo(i) for i in range(1, 6)]
         client = FakeClient(
             created=candidates, core_remaining=12,
             histories={item.full_name: [StarDay("2026-09-25", 6 - item.id)] for item in candidates},
         )
         result = RadarService(client, self.store).refresh(self.today, self.now)
-        self.assertEqual(len(client.history_calls), 2)
-        self.assertGreaterEqual(client.core_remaining, 10)
+        self.assertEqual(len(client.history_calls), 5)
+        self.assertGreaterEqual(client.core_remaining, 0)
         self.assertEqual(result.growth_coverage.candidate_count, 5)
-        self.assertEqual(result.growth_coverage.scored_count, 2)
-        self.assertEqual(len(result.recommendations), 2)
+        self.assertEqual(result.growth_coverage.scored_count, 5)
+        self.assertEqual(len(result.recommendations), 5)
 
     def test_first_day_without_official_history_keeps_pending_candidates(self):
         result = RadarService(FakeClient(created=[repo(1)]), self.store).refresh(self.today, self.now)

@@ -26,7 +26,8 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(budget.can_spend("core", 1, 0))
         budget.observe({"X-RateLimit-Resource":"core", "X-RateLimit-Remaining":"12"})
         self.assertTrue(budget.can_spend("core", 2, 0))
-        self.assertFalse(budget.can_spend("core", 3, 0))
+        self.assertTrue(budget.can_spend("core", 12, 0))
+        self.assertFalse(budget.can_spend("core", 13, 0))
         self.assertFalse(budget.can_spend("core", 1, 300))
 
     def test_source_failure_keeps_other_sources(self):

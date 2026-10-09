@@ -303,9 +303,14 @@ class SearchStore:
             db.execute('UPDATE search_runs SET owner=NULL,expires_at=0 WHERE job_id=? AND generation=? AND owner=?',
                 (lease.job_id,lease.generation,lease.owner))
 
-    def publish(self,value,lease,*,now=None,cancel_event=None,_connection=None):
+    def publish(self,value,lease,*,now=None,cancel_event=None,_connection=None,_allow_rollover=False):
         now=now or datetime.now().astimezone();scope=value.scope
-        if scope.local_date!=now.date().isoformat():raise ValueError('日期已变化，旧任务结果不再发布')
+        # An active atomic round may cross local midnight. Save to its actual
+        # started day, preserving every observation timestamp; never relabel it
+        # as today's fresh data. Lease, statistics and generation checks remain.
+        scope_day=datetime.fromisoformat(scope.local_date).date()
+        rollover=_allow_rollover and (now.date()-scope_day).days==1
+        if scope_day!=now.date() and not rollover:raise ValueError('日期已变化，旧任务结果不再发布')
         if scope.section=='growth' and scope.stat_date!=(now.astimezone(timezone.utc).date()-timedelta(days=1)).isoformat():
             raise ValueError('官方统计日已变化')
         if not lease.acquired or value.generation!=lease.generation:raise ValueError('任务发布权限已失效')
@@ -315,7 +320,7 @@ class SearchStore:
             if not observed or snapshot.local_date!=scope.local_date or snapshot.observed_at!=observed.observed_at or snapshot.stars!=observed.repo.stars:
                 raise ValueError('快照与真实观测不一致')
             at=datetime.fromisoformat(snapshot.observed_at)
-            if at.tzinfo is None or at.astimezone(now.tzinfo).date()!=now.date():raise ValueError('缓存不能伪装为今日快照')
+            if at.tzinfo is None or at>now or not scope_day<=at.astimezone(now.tzinfo).date()<=now.date():raise ValueError('缓存不能伪装为今日快照')
         for item in value.recommendations:
             if item.repo_id not in by_id or item.section!=scope.section or item.keyword_id!=scope.keyword_id or item.local_date!=scope.local_date:
                 raise ValueError('推荐不属于当前检索范围')
@@ -391,7 +396,7 @@ class SearchStore:
             # module's validation/disk error restores every old row and ledger.
             for value in values:
                 db.execute('DELETE FROM recommendations WHERE local_date=? AND section=? AND COALESCE(keyword_id,0)=?',(value.scope.local_date,value.scope.section,value.scope.keyword_id or 0))
-            for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db)
+            for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db,_allow_rollover=True)
 
     def growth_frontier(self,scope):
         """Prioritize current trends and previous leaders, then rotate old work.

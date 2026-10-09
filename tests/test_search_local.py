@@ -27,7 +27,7 @@ class LocalDiscoveryTests(unittest.TestCase):
   from github_radar.models import StarDay
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
   engine=self.engine(2);client=GitHubClient(opener=lambda *a,**kw:None,request_concurrency=1)
-  engine.client=client;client.core_remaining=12;calls=[]
+  engine.client=client;client.core_remaining=2;calls=[]
   engine.search.save_star_day(1,StarDay("2026-10-04",99),self.now)
   def history(name):
    calls.append(name)
@@ -42,7 +42,7 @@ class LocalDiscoveryTests(unittest.TestCase):
  def test_growth_measurement_prioritizes_today_trends_before_total_stars(self):
   from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
-  engine=self.engine(4);engine.client.core_remaining=11;calls=[]
+  engine=self.engine(4);engine.client.core_remaining=1;calls=[]
   engine.sources.collect=lambda *args:engine.search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000+i),full_name='org/r'+str(i)),self.now.isoformat()) for i in range(1,5)),())
   from github_radar.discovery_types import SourceEvidence
   evidence=SourceEvidence(source_name='trendshift_daily',source_url='https://trendshift.io/',full_name='org/r1',observed_at=self.now.isoformat(),repo_id=1,period='day',stat_date=scope.stat_date,rank_kind='source',source_rank=1,total_stars_text=None,daily_added_text=None,evidence_text='trend')
@@ -55,7 +55,7 @@ class LocalDiscoveryTests(unittest.TestCase):
  def test_quota_cutoff_publishes_verified_range_and_reads_remaining_cache(self):
   from github_radar.models import StarDay
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
-  engine=self.engine(4);engine.client.core_remaining=11
+  engine=self.engine(4);engine.client.core_remaining=1
   calls=[]
   engine.client.star_history_weeks=lambda name:(calls.append(name) or [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))])
   engine.search.save_star_day(1,StarDay('2026-10-04',99),self.now)
@@ -69,7 +69,7 @@ class LocalDiscoveryTests(unittest.TestCase):
  def test_quota_cutoff_does_not_hide_independent_official_failure(self):
   from github_radar.github_client import GitHubRequestError
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
-  engine=self.engine(2);engine.client.core_remaining=11
+  engine=self.engine(2);engine.client.core_remaining=1
   def fail(name):raise GitHubRequestError('invalid official response')
   engine.client.star_history_weeks=fail
   p=engine.run(scope)
@@ -119,12 +119,12 @@ class LocalDiscoveryTests(unittest.TestCase):
   engine=self.engine(1);client=GitHubClient(opener=lambda *a,**kw:None)
   engine.client=client;calls=[];stages=[];reset=int(self.now.timestamp())+2
   def limits(path):
-   calls.append(path);return {'resources':{'core':{'remaining':10 if len(calls)==1 else 50,'reset':reset}}}
+   calls.append(path);return {'resources':{'core':{'remaining':0 if len(calls)==1 else 50,'reset':reset}}}
   client._get_json=limits
   class Event:
    def is_set(_):return False
    def wait(_,seconds):self.time[0]+=seconds;self.now+=timedelta(seconds=seconds);return False
-  budget=RequestBudget(10,30,float('inf'))
+  budget=RequestBudget(0,30,float('inf'))
   def tick(**kw):stages.append(kw.get('stage'))
   iterator=engine._wait_core_steps(budget,tick,Event())
   while True:
@@ -133,7 +133,7 @@ class LocalDiscoveryTests(unittest.TestCase):
   self.assertTrue(result);self.assertEqual(budget.core_remaining,50)
   self.assertEqual(len(calls),2);self.assertIn('waiting_quota',stages)
   canceled=threading.Event();canceled.set()
-  iterator=engine._wait_core_steps(RequestBudget(10,30,float('inf')),tick,canceled)
+  iterator=engine._wait_core_steps(RequestBudget(0,30,float('inf')),tick,canceled)
   with self.assertRaises(StopIteration) as stopped:next(iterator)
   self.assertFalse(stopped.exception.value)
 
@@ -365,7 +365,7 @@ class LocalJobsTests(unittest.TestCase):
   from github_radar.service import RadarService
   from github_radar.search_jobs import SearchJobs
   def factory():
-   e=self.engine(12);e.client.core_remaining=11
+   e=self.engine(12);e.client.core_remaining=1
    e.client.star_history_weeks=lambda name:[OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(42,0,0,0,0,0,0))]
    return e
   result=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,factory,now=lambda:self.now,model=lambda:'model').refresh(self.scope.local_date,self.now.isoformat())

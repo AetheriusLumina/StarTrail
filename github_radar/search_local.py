@@ -70,6 +70,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         tick();yield p
         if isinstance(e.client,GitHubClient):e.client.renew_expired_quotas(now=e.now().timestamp())
         budget=RequestBudget(getattr(e.client,'core_remaining',None),getattr(e.client,'search_remaining',None),deadline,quota_event=getattr(e,'quota_event',None));e._active_budget=budget
+        if isinstance(e.client,GitHubClient):budget.quota_refresh=e.client.reconcile_quota
         expansion=None
         if scope.section=='keyword':
             expansion=e.search.load_expansion(scope)
@@ -122,7 +123,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
             tick(stage='matching' if scope.section=='keyword' else 'preparing')
             observation=ObservedRepository(_repository(json.loads(row['payload'])),row['observed_at']);repo=observation.repo
             if repo.archived or repo.stars<scope.min_stars:continue
-            if datetime.fromisoformat(observation.observed_at).astimezone(e.now().tzinfo).date().isoformat()!=scope.local_date:
+            if not scope.local_date<=datetime.fromisoformat(observation.observed_at).astimezone(e.now().tzinfo).date().isoformat()<=e.now().date().isoformat():
                 if budget.quota_event is not None and budget.quota_event.is_set():
                     pending+=1;continue
                 observation=e.sources.resolve_candidate(DiscoveryCandidate(repo.full_name,repo.id,('tracked',),observation.observed_at),budget)
@@ -165,7 +166,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         reason=getattr(e,'abort_reason',None)
         p=replace(p,status='paused' if reason else 'canceled',stage='stopped',limited=True,notes=(*p.notes,reason or '检索已取消，断点保留'),**metrics());e.search.save_progress(p,lease=lease);raise
     except Exception as exc:
-        p=replace(p,status='canceled' if event.is_set() else 'paused',stage='stopped',limited=True,ai_started_at='',notes=tuple(dict.fromkeys((*p.notes,str(exc)[:300]))),**metrics());e.search.save_progress(p,lease=lease)
+        p=replace(p,status='canceled' if event.is_set() else 'paused',stage='stopped',limited=True,failed=not event.is_set(),ai_started_at='',notes=tuple(dict.fromkeys((*p.notes,str(exc)[:300]))),**metrics());e.search.save_progress(p,lease=lease)
     finally:
         logging.getLogger(__name__).info('search timing %s',json.dumps({'section':scope.section,'keyword_id':scope.keyword_id,'status':p.status,'candidate_pool':p.candidate_pool,'official_checked':p.official_checked,**metrics()},ensure_ascii=False))
         if e.deferred_publication is None:
