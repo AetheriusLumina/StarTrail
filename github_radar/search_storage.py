@@ -26,7 +26,10 @@ def initialize_search_schema(db):
             scope_key TEXT, generation INTEGER NOT NULL DEFAULT 0,
             owner TEXT, expires_at REAL NOT NULL DEFAULT 0, payload TEXT NOT NULL)""",
         'CREATE TABLE IF NOT EXISTS search_cursors (scope_key TEXT NOT NULL,source TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope_key,source))',
+        'CREATE INDEX IF NOT EXISTS idx_discovery_catalog_repo_scored ON discovery_catalog(repo_id,last_scored_at)',
         'CREATE INDEX IF NOT EXISTS idx_search_candidate_page ON search_candidates(scope_key,repo_id)',
+        "CREATE INDEX IF NOT EXISTS idx_search_candidate_import ON search_candidates(json_extract(scope_key,'$[0]'),json_extract(scope_key,'$[1]'),json_extract(scope_key,'$[2]'),repo_id)",
+        "CREATE INDEX IF NOT EXISTS idx_search_candidate_stars ON search_candidates(scope_key,-json_extract(payload,'$.stars'),repo_id)",
         "CREATE INDEX IF NOT EXISTS idx_search_candidate_name ON search_candidates(scope_key,json_extract(payload,'$.full_name') COLLATE NOCASE)",
         'CREATE TABLE IF NOT EXISTS search_availability(repo_id INTEGER PRIMARY KEY,checked_date TEXT NOT NULL)',
         'CREATE TABLE IF NOT EXISTS search_http_cache(path TEXT PRIMARY KEY,run_id TEXT NOT NULL,payload TEXT NOT NULL)',
@@ -61,8 +64,14 @@ class SearchStore:
         after=0
         while True:
             with closing(self.store._connect()) as db:
-                rows=db.execute("SELECT repo_id,payload,observed_at FROM (SELECT repo_id,payload,observed_at,ROW_NUMBER() OVER(PARTITION BY repo_id ORDER BY julianday(observed_at) DESC,scope_key DESC) AS position FROM search_candidates WHERE scope_key!=? AND json_extract(scope_key,'$[0]')=? AND json_extract(scope_key,'$[1]') IS ? AND json_extract(scope_key,'$[2]')=? AND repo_id>?) WHERE position=1 ORDER BY repo_id LIMIT 100",
-                    (scope_key(scope),scope.section,scope.keyword_id,scope.term,after)).fetchall()
+                # First seek a bounded identity page; only then select the
+                # newest version among its old scopes. Windowing the full tail
+                # for every page makes a large persistent catalog quadratic.
+                where="scope_key!=? AND json_extract(scope_key,'$[0]')=? AND json_extract(scope_key,'$[1]') IS ? AND json_extract(scope_key,'$[2]')=?"
+                params=(scope_key(scope),scope.section,scope.keyword_id,scope.term)
+                identities=[r[0] for r in db.execute("SELECT DISTINCT repo_id FROM search_candidates INDEXED BY idx_search_candidate_import WHERE "+where+" AND repo_id>? ORDER BY repo_id LIMIT 100",(*params,after))]
+                if not identities:return
+                rows=db.execute("SELECT repo_id,payload,observed_at FROM (SELECT repo_id,payload,observed_at,ROW_NUMBER() OVER(PARTITION BY repo_id ORDER BY julianday(observed_at) DESC,scope_key DESC) AS position FROM search_candidates INDEXED BY idx_search_candidate_import WHERE "+where+" AND repo_id IN ("+','.join('?' for _ in identities)+")) WHERE position=1 ORDER BY repo_id",(*params,*identities)).fetchall()
             if not rows:return
             self.save_candidates(scope,tuple(ObservedRepository(_repository(json.loads(r['payload'])),r['observed_at']) for r in rows),())
             after=rows[-1]['repo_id']
@@ -131,6 +140,23 @@ class SearchStore:
             if timedelta(0)<=age<timedelta(hours=6):return StarDay(stat_date,row['added'])
         return None
 
+    def cached_growth(self,scope,now):
+        """Read remaining valid evidence after quota stop without per-ID probes."""
+        from .models import StarDay
+        after=0
+        while True:
+            with closing(self.store._connect()) as db:
+                rows=db.execute("""SELECT c.repo_id,c.payload,c.observed_at,s.added,s.fetched_at
+                    FROM search_candidates c JOIN search_star_days s ON s.repo_id=c.repo_id
+                    WHERE c.scope_key=? AND c.repo_id>? AND s.stat_date=? AND s.rule='utc-sunday-v2'
+                    AND NOT EXISTS(SELECT 1 FROM search_availability a WHERE a.repo_id=c.repo_id AND a.checked_date=?)
+                    ORDER BY c.repo_id LIMIT 100""",(scope_key(scope),after,scope.stat_date,scope.local_date)).fetchall()
+            if not rows:return
+            for row in rows:
+                age=now-datetime.fromisoformat(row['fetched_at'])
+                if timedelta(0)<=age<timedelta(hours=6):yield row,StarDay(scope.stat_date,row['added'])
+            after=rows[-1]['repo_id']
+
     def load_expansion(self,scope):
         with closing(self.store._connect()) as db:
             row=db.execute('SELECT payload FROM query_expansions WHERE scope_key=?',(scope_key(scope),)).fetchone()
@@ -152,10 +178,12 @@ class SearchStore:
             for observed in observations:
                 if type(observed.repo.id) is not int or observed.repo.id<1:raise ValueError('仓库ID无效')
                 # ISO strings can use different offsets; compare instants in Python.
-                row=db.execute('SELECT observed_at FROM search_candidates WHERE scope_key=? AND repo_id=?',(key,observed.repo.id)).fetchone()
+                row=db.execute('SELECT observed_at,payload FROM search_candidates WHERE scope_key=? AND repo_id=?',(key,observed.repo.id)).fetchone()
                 if row and datetime.fromisoformat(row[0])>datetime.fromisoformat(observed.observed_at):continue
+                payload=json.dumps(asdict(observed.repo),ensure_ascii=False)
+                if row and row[0]==observed.observed_at and row[1]==payload:continue
                 db.execute('INSERT INTO search_candidates VALUES(?,?,?,?) ON CONFLICT(scope_key,repo_id) DO UPDATE SET observed_at=excluded.observed_at,payload=excluded.payload',
-                    (key,observed.repo.id,observed.observed_at,json.dumps(asdict(observed.repo),ensure_ascii=False)))
+                    (key,observed.repo.id,observed.observed_at,payload))
         if evidence:
             from .discovery_types import DiscoveryCandidate
             candidates=tuple(DiscoveryCandidate(e.full_name,e.repo_id,(e.source_name,),e.observed_at,evidence=(e,)) for e in evidence)
@@ -391,19 +419,29 @@ class SearchStore:
             ids=identities[offset:offset+100]
             with closing(self.store._connect()) as db:
                 values={r['repo_id']:r for r in db.execute('SELECT repo_id,payload,observed_at FROM search_candidates WHERE scope_key=? AND repo_id IN ('+','.join('?' for _ in ids)+')',(scope_key(scope),*ids))}
+                unavailable={x[0] for x in db.execute('SELECT repo_id FROM search_availability WHERE checked_date=? AND repo_id IN ('+','.join('?' for _ in ids)+')',(scope.local_date,*ids))}
             for identity in ids:
-                if identity in values and not self.unavailable(identity,scope.local_date):yield values[identity]
+                if identity in values and identity not in unavailable:yield values[identity]
 
     def frontier(self,scope):
         # Close each read before network/cache writes; no cursor spans a task.
         after_stars=None;after_id=0;visited=set()
         while True:
             with closing(self.store._connect()) as db:
-                rows=db.execute("SELECT repo_id,payload,observed_at,json_extract(payload,'$.stars') AS stars FROM search_candidates WHERE scope_key=? AND (? IS NULL OR json_extract(payload,'$.stars')<? OR (json_extract(payload,'$.stars')=? AND repo_id>?)) ORDER BY stars DESC,repo_id LIMIT 100",
-                    (scope_key(scope),after_stars,after_stars,after_stars,after_id)).fetchall()
+                # Seek equal-star identities separately: SQLite's expression
+                # tuple comparison rescans that group's prefix on every page.
+                select="SELECT repo_id,payload,observed_at,json_extract(payload,'$.stars') AS stars FROM search_candidates INDEXED BY idx_search_candidate_stars WHERE scope_key=?"
+                order=" ORDER BY -json_extract(payload,'$.stars'),repo_id LIMIT ?"
+                if after_stars is None:
+                    rows=db.execute(select+order,(scope_key(scope),100)).fetchall()
+                else:
+                    rows=db.execute(select+" AND -json_extract(payload,'$.stars')=? AND repo_id>? ORDER BY repo_id LIMIT ?",(scope_key(scope),-after_stars,after_id,100)).fetchall()
+                    if len(rows)<100:
+                        rows+=db.execute(select+" AND -json_extract(payload,'$.stars')>?"+order,(scope_key(scope),-after_stars,100-len(rows))).fetchall()
+                unavailable={x[0] for x in db.execute('SELECT repo_id FROM search_availability WHERE checked_date=? AND repo_id IN ('+','.join('?' for _ in rows)+')',(scope.local_date,*(x['repo_id'] for x in rows)))} if rows else set()
             if not rows:return
             for row in rows:
-                if row['repo_id'] not in visited and not self.unavailable(row['repo_id'],scope.local_date):
+                if row['repo_id'] not in visited and row['repo_id'] not in unavailable:
                     visited.add(row['repo_id'])
                     yield row
             after_stars=rows[-1]['stars'];after_id=rows[-1]['repo_id']

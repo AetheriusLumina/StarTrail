@@ -5,6 +5,7 @@ from dataclasses import asdict
 from .ai_types import AIRepositoryInput
 from .search_types import PreparedCandidate,ObservedRepository
 from .github_client import GitHubRequestError, GitHubRateLimitError, GitHubClient
+from .discovery_types import RequestBudgetExceeded
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -376,13 +377,19 @@ class SearchCoordinator:
                 event.wait(min(1,max(0,ready_at-self.now().timestamp())))
         return False
 
-    def _frontier(self,scope,budget,tick,event):
+    def _frontier(self,scope,budget,tick,event,*,only_ids=None):
         if scope.section=='keyword':
             for row in self.search.frontier(scope):yield row,None
             return
-        total=sum(1 for row in self.search.frontier(scope) if not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars)
+        if only_ids is not None:
+            with closing(self.store._connect()) as db:
+                subset=db.execute('SELECT repo_id,payload,observed_at FROM search_candidates WHERE scope_key=? AND repo_id IN ('+','.join('?' for _ in only_ids)+')',(scope_key(scope),*only_ids)).fetchall() if only_ids else []
+            total=sum(not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars for row in subset)
+        else:
+            with closing(self.store._connect()) as db:
+                total=db.execute("SELECT COUNT(*) FROM search_candidates c WHERE scope_key=? AND json_extract(payload,'$.archived')=0 AND json_extract(payload,'$.stars')>=? AND NOT EXISTS(SELECT 1 FROM search_availability a WHERE a.repo_id=c.repo_id AND a.checked_date=?)",(scope_key(scope),scope.min_stars,scope.local_date)).fetchone()[0]
         tick(pending=total)
-        measured=[];checked=0;cached_count=0;rows=iter(self.search.frontier(scope) if self.legacy_review else self.search.growth_frontier(scope));workers=(2 if self.legacy_review else self.client.request_concurrency) if isinstance(self.client,GitHubClient) else 1
+        measured=[];checked=0;cached_count=0;checked_ids=set();rows=iter(subset if only_ids is not None else self.search.frontier(scope) if self.legacy_review else self.search.growth_frontier(scope));workers=(2 if self.legacy_review else self.client.request_concurrency) if isinstance(self.client,GitHubClient) else 1
         def fetch(repo):
             def official(call,*args):
                 from urllib.error import URLError,HTTPError
@@ -418,6 +425,17 @@ class SearchCoordinator:
                     if not self.legacy_review and self.clock()<budget.deadline:
                         quota_stop=True
                         tick(limited=True,quota_limited=True,notes=('本轮请求额度已到预留线；未处理候选和检索断点保留，下次更新继续',))
+                        # No more network waves or Python scan of every pending ID.
+                        # Retain all still-valid disk evidence for this ranking.
+                        for cached_row,cached_day in self.search.cached_growth(scope,self.now()):
+                            if event.is_set():break
+                            if cached_row['repo_id'] in checked_ids:continue
+                            payload=json.loads(cached_row['payload'])
+                            if payload['archived'] or payload['stars']<scope.min_stars:continue
+                            checked_ids.add(cached_row['repo_id']);checked+=1;cached_count+=1
+                            if cached_day.added>0:measured.append((cached_row,cached_day,payload['stars']))
+                        tick(official_checked=checked,cache_hits=cached_count,pending=max(0,total-checked))
+                        break
                     elif not (yield from self._wait_core_steps(budget,tick,event)):
                         tick(limited=True,notes=('官方日增核算达到请求预算，未核算候选保留断点',));break
                     needs_wait=False
@@ -433,7 +451,7 @@ class SearchCoordinator:
                     cached_day=self.search.load_star_day(repo.id,scope.stat_date,self.now())
                     if cached_day is not None:
                         unrecovered.discard(repo.id)
-                        checked+=1;cached_count+=1;tick(official_checked=checked,cache_hits=cached_count,pending=max(0,total-checked))
+                        checked_ids.add(repo.id);checked+=1;cached_count+=1;tick(official_checked=checked,cache_hits=cached_count,pending=max(0,total-checked))
                         if cached_day.added>0:measured.append((row,cached_day,repo.stars))
                         continue
                     if quota_stop:continue
@@ -458,12 +476,15 @@ class SearchCoordinator:
                             tick(limited=True,notes=('官方统计日或UTC边界无法验证，未当作零日增',))
                         else:
                             unrecovered.discard(repo.id)
-                            self.search.save_star_day(repo.id,day,self.now());checked+=1;tick(official_checked=checked,pending=max(0,total-checked))
+                            self.search.save_star_day(repo.id,day,self.now());checked_ids.add(repo.id);checked+=1;tick(official_checked=checked,pending=max(0,total-checked))
                         self.store.mark_catalog_scored(repo.id,self.now().isoformat())
                         if day and day.added>0:measured.append((row,day,repo.stars))
                     except (GitHubRequestError,ValueError,OSError) as exc:
-                        if isinstance(exc,GitHubRateLimitError):
+                        if isinstance(exc,GitHubRateLimitError) or (budget.quota_event is not None and budget.quota_event.is_set() and (isinstance(exc,RequestBudgetExceeded) or isinstance(exc.__cause__,RequestBudgetExceeded))):
+                            # Already queued workers may be refused after a sibling
+                            # latches the quota stop. That is not a network failure.
                             retry_rows.append(row);needs_wait=True
+                            if budget.quota_event is not None:budget.quota_event.set()
                         else:
                             from urllib.error import URLError,HTTPError
                             from http.client import HTTPException

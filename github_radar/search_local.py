@@ -30,6 +30,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         nonlocal p
         if event.is_set():raise AIOutputError('检索已取消')
         if e.clock()>=deadline:raise AIOutputError('检索时间保护已到，候选及断点保留；榜单未保存')
+        if changes.get('quota_limited') and getattr(e,'quota_event',None) is not None:e.quota_event.set()
         if changes.get('limited') and not changes.get('quota_limited') and 'failed' not in changes:changes['failed']=True
         if 'notes' in changes:changes['notes']=tuple(dict.fromkeys((*p.notes,*changes['notes'])))
         important=changes.get('stage',p.stage)!=p.stage or changes.get('limited',False)!=p.limited or 'ai_started_at' in changes
@@ -60,14 +61,19 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
                 except Exception:pass
             p=replace(p,ai_started_at='')
     def timeout():return max(.01,min(120,deadline-e.clock()))
+    def check_source_failure():
+        if getattr(e.sources,'failed',False):
+            tick(limited=True,failed=True,notes=tuple(e.sources.notes))
+            raise AIOutputError('官方来源检索失败，整份旧榜保留')
+
     try:
         tick();yield p
         if isinstance(e.client,GitHubClient):e.client.renew_expired_quotas(now=e.now().timestamp())
-        budget=RequestBudget(getattr(e.client,'core_remaining',None),getattr(e.client,'search_remaining',None),deadline);e._active_budget=budget
+        budget=RequestBudget(getattr(e.client,'core_remaining',None),getattr(e.client,'search_remaining',None),deadline,quota_event=getattr(e,'quota_event',None));e._active_budget=budget
         expansion=None
         if scope.section=='keyword':
             expansion=e.search.load_expansion(scope)
-            if expansion is None and not prepare_only:
+            if expansion is None and not prepare_only and not (budget.quota_event is not None and budget.quota_event.is_set()):
                 tick(expansion_calls=p.expansion_calls+1)
                 try:
                     # Read the site's actual directory; AI chooses only valid topics.
@@ -88,10 +94,21 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         tick(stage='collecting')
         if hasattr(e.sources,'collect_steps'):
             for _ in e.sources.collect_steps(scope,expansion,result,budget,event,lambda stage,count:tick(stage=stage,collected=count)):
+                check_source_failure()
                 tick(candidate_pool=e.search.candidate_count(scope));yield p
+                # Obtain official growth evidence while discovery still has
+                # quota. Otherwise the first search limit can leave thousands
+                # of metadata-only candidates and nothing eligible to publish.
+                ids=getattr(e.sources,'official_page_ids',None)
+                if scope.section=='growth' and ids:
+                    page_ids=tuple(ids);ids.clear()
+                    for _row,_day in e._frontier(scope,budget,tick,event,only_ids=page_ids):
+                        if _row is None:yield p
         else:e.sources.collect(scope,expansion,result,budget,event,lambda stage,count:tick(stage=stage,collected=count))
         if hasattr(e.sources,'refresh_candidates_steps'):
-            for _ in e.sources.refresh_candidates_steps(scope,budget,event,lambda stage,count:tick(stage=stage,collected=count)):yield p
+            for _ in e.sources.refresh_candidates_steps(scope,budget,event,lambda stage,count:tick(stage=stage,collected=count)):
+                check_source_failure();yield p
+        check_source_failure()
         tick(candidate_pool=e.search.candidate_count(scope),source_status=dict(getattr(e.sources,'source_status',{})));yield p
         if prepare_only:
             if scope.section=='growth':
@@ -106,6 +123,8 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
             observation=ObservedRepository(_repository(json.loads(row['payload'])),row['observed_at']);repo=observation.repo
             if repo.archived or repo.stars<scope.min_stars:continue
             if datetime.fromisoformat(observation.observed_at).astimezone(e.now().tzinfo).date().isoformat()!=scope.local_date:
+                if budget.quota_event is not None and budget.quota_event.is_set():
+                    pending+=1;continue
                 observation=e.sources.resolve_candidate(DiscoveryCandidate(repo.full_name,repo.id,('tracked',),observation.observed_at),budget)
                 if observation is None:pending+=1;continue
                 repo=observation.repo;e.search.save_candidates(scope,(observation,),())
@@ -117,6 +136,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
                 verdicts[repo.id]=e.search.matching_verdict(scope,observation,terms,strict=True)
             else:daily[repo.id]=day
             if len(prepared)%20==0:yield p
+        if budget.quota_event is not None and budget.quota_event.is_set():tick(limited=True,quota_limited=True)
         if scope.section=='keyword':e.search.save_judgments(scope,prepared,tuple(verdicts.values()),(),e.now().isoformat())
         if scope.section=='growth':pending=max(pending,p.pending)
         tick(stage='ranking',matched_count=sum(v.verdict=='relevant' for v in verdicts.values()),unique=len(prepared),pending=pending,limited=p.limited or e.sources.limited or bool(pending),quota_limited=p.quota_limited or getattr(e.sources,'quota_limited',False),failed=p.failed or getattr(e.sources,'failed',e.sources.limited),metadata_pending=getattr(e.sources,'metadata_pending',0),notes=tuple(dict.fromkeys((*p.notes,*e.sources.notes,*(result.notes if result else ())))))
@@ -130,7 +150,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         current=e.store.daily_recommendations(scope.local_date);own={r.repo_id for r in current if r.section==scope.section and r.keyword_id==scope.keyword_id}
         picks=ranked({r.repo_id for r in current}-own,own)
         value=Publication(scope,lease.generation,observations,snapshots,picks,coverage)
-        tick(stage='publishing');yield p
+        tick(stage='prepared' if defer_publish else 'publishing');yield p
         if p.failed or (p.limited and not p.quota_limited):raise AIOutputError('本轮检索或官方证据未完成，整份旧榜保留')
         if p.quota_limited and not prepared and (scope.section!='growth' or not p.official_checked):raise AIOutputError('本轮额度不足且没有可核实结果，整份旧榜保留')
         if defer_publish:
@@ -142,7 +162,8 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
             p=replace(p,status='partial' if p.quota_limited else 'done',stage='complete',**metrics())
         e.search.save_progress(p,lease=lease)
     except GeneratorExit:
-        p=replace(p,status='canceled',stage='stopped',limited=True,notes=(*p.notes,'检索已取消，断点保留'),**metrics());e.search.save_progress(p,lease=lease);raise
+        reason=getattr(e,'abort_reason',None)
+        p=replace(p,status='paused' if reason else 'canceled',stage='stopped',limited=True,notes=(*p.notes,reason or '检索已取消，断点保留'),**metrics());e.search.save_progress(p,lease=lease);raise
     except Exception as exc:
         p=replace(p,status='canceled' if event.is_set() else 'paused',stage='stopped',limited=True,ai_started_at='',notes=tuple(dict.fromkeys((*p.notes,str(exc)[:300]))),**metrics());e.search.save_progress(p,lease=lease)
     finally:

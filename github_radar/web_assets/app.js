@@ -668,10 +668,10 @@ function renderIssue(issue) {
   // Only foreground refresh owns the user's progress line. Background preparation
   // and old module generations remain available in the developer diagnostics.
   const stages={waiting_quota:'等待GitHub额度',expanding:'准备关键词',collecting:'收集项目',
-    measuring:'核算官方日增',matching:'匹配关键词',prepared:'准备保存',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
+    measuring:'核算官方日增',matching:'匹配关键词',prepared:'等待其他榜单',ranking:'排名',publishing:'保存',complete:'完成',stopped:'暂停'};
   const stagesEn={waiting_quota:'Waiting for GitHub quota',expanding:'Preparing keywords',collecting:'Collecting projects',
-    measuring:'Measuring daily Star growth',matching:'Matching keywords',prepared:'Preparing to save',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
-  const active=(issue.active_search_progress||[]).filter(p=>p.status==='running').sort((a,b)=>String(b.started_at||'').localeCompare(String(a.started_at||'')))[0];
+    measuring:'Measuring daily Star growth',matching:'Matching keywords',prepared:'Waiting for other boards',ranking:'Ranking',publishing:'Saving',complete:'Complete',stopped:'Paused'};
+  const active=(issue.active_search_progress||[]).filter(p=>p.status==='running').sort((a,b)=>Number(a.stage==='prepared')-Number(b.stage==='prepared')||String(b.started_at||'').localeCompare(String(a.started_at||'')))[0];
   if((issue.busy||issue.search_cancellable)&&active){
     const label=active.section==='growth'?(language==='en'?'Star growth':'增长榜'):
       issue.keywords.find(k=>k.id===active.keyword_id)?.term||(language==='en'?'Keywords':'关键词');

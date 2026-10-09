@@ -93,7 +93,24 @@ def _main(
         (args.data_dir / "uninstall-error.txt").unlink(missing_ok=True)
         return 0
 
-    store = RadarStore(args.data_dir)
+    if launcher is None and not args.refresh and args.add_keyword is None and not args.sync_scheduler:
+        from .browser_launcher import handoff_existing
+        if handoff_existing(args.data_dir, scheduled=args.scheduled_refresh):
+            return 0
+    import sqlite3
+    try:
+        store = RadarStore(args.data_dir)
+    except sqlite3.OperationalError as exc:
+        from .diagnostic_log import record_error
+        message = ('本地数据库正被其他任务占用，请等待当前任务结束后再打开；原数据已保留。'
+                   if 'locked' in str(exc).lower() or 'busy' in str(exc).lower()
+                   else '无法打开本地数据库，请检查磁盘和目录权限；原数据已保留。')
+        record_error(args.data_dir, 'startup-database', str(exc))
+        _print_message(message)
+        if getattr(sys, 'frozen', False) and not any((args.scheduled_refresh,args.refresh,args.sync_scheduler,args.add_keyword is not None)):
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None,message,'StarTrail',0x40)
+        return 1
     if args.sync_scheduler:
         from .diagnostic_log import record_error
         from .windows_scheduler import SchedulerError
@@ -115,7 +132,7 @@ def _main(
     from .github_account import GitHubAccount
     from .oauth_config import publisher_client_id
     account = GitHubAccount(store.data_dir, client_id=publisher_client_id())
-    service = RadarService(client or GitHubClient(token_provider=account.access_token,on_auth_failure=account.reject_token,request_concurrency=100), store,
+    service = RadarService(client or GitHubClient(token_provider=account.access_token,on_auth_failure=account.reject_token,request_concurrency=25), store,
                            TrendingClient() if client is None else None)
     if client is None:
         from .search_jobs import install_search

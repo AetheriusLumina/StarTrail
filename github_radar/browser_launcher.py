@@ -103,6 +103,29 @@ def handoff_scheduled_refresh(store: RadarStore, *, wait_seconds: float = 120) -
     return "accepted"
 
 
+def handoff_existing(data_dir, *, scheduled=False, opener=None):
+    """Reuse a verified instance before opening SQLite or running migrations."""
+    record = _read_record(Path(data_dir) / _RECORD_NAME)
+    if not record or not _healthy(record):
+        return False
+    if not scheduled:
+        (opener or webbrowser.open)(_url(record))
+        return True
+    origin = f"http://127.0.0.1:{record['port']}"
+    request = Request(origin + '/api/scheduled-refresh', data=b'{}', headers={
+        'X-Radar-Token': record['token'], 'Origin': origin,
+        'Content-Type': 'application/json'})
+    try:
+        with _HTTP.open(request, timeout=2) as response:
+            return response.status in (200, 202)
+    except HTTPError as exc:
+        return exc.code == 409
+    except OSError:
+        # A verified owner already exists. Do not start a competing writer
+        # because an accepted request's response was delayed or lost.
+        return True
+
+
 def launch_browser_app(
     service: RadarService,
     store: RadarStore,

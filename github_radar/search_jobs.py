@@ -1,5 +1,6 @@
 """Shared automatic search entry for browser, CLI and Windows scheduler."""
 import threading
+import sqlite3
 import uuid
 import logging
 import json
@@ -32,7 +33,17 @@ class SearchJobs:
         stop=threading.Event()
         def heartbeat():
             while not stop.wait(30):
-                if not self.store.load_search_enabled() or not self._renew_leases(search,lease):self.cancel();return
+                try:
+                    if not self.store.load_search_enabled() or not self._renew_leases(search,lease):self.cancel();return
+                except sqlite3.OperationalError as exc:
+                    # A transient reader/writer conflict must not silently kill
+                    # lease maintenance. Retry next heartbeat within the TTL;
+                    # a genuinely expired lease still cancels through renewal.
+                    if getattr(exc,'sqlite_errorcode',0)&255 in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) or 'locked' in str(exc).lower() or 'busy' in str(exc).lower():
+                        logging.getLogger(__name__).warning('Lease heartbeat temporarily busy; retrying')
+                        continue
+                    logging.getLogger(__name__).exception('Lease heartbeat failed')
+                    self.cancel();return
         thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
         return stop,thread
 
@@ -164,8 +175,12 @@ class SearchJobs:
             ai_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='ai-discovery') if atomic else None
             self._engines=engines
             shared_pages={}
+            quota_event=threading.Event()
             for engine in engines:
-                if hasattr(engine,'sources'):engine.sources.shared_pages=shared_pages
+                engine.quota_event=quota_event
+                if hasattr(engine,'sources'):
+                    engine.sources.shared_pages=shared_pages
+                    engine.sources.quota_event=quota_event
             if ai_pool:
                 for engine in engines:engine.ai_executor=ai_pool
             prior_cache=getattr(self.service.client,'request_cache',None)
@@ -173,24 +188,35 @@ class SearchJobs:
             from .search_storage import SearchRequestCache
             if isinstance(self.service.client,GitHubClient):self.service.client.request_cache=SearchRequestCache(self.store)
             try:
+                def report(index, progress):
+                    latest[index]=progress
+                    self.foreground_progress=[p for p in latest if p is not None]
                 for index,(engine,module) in enumerate(zip(engines,scopes)):
                     engine.can_publish=lambda index=index:all(done[:index])
-                    if hasattr(engine,'run_steps'):iterators.append(engine.run_steps(module,cancel_event=self._event,**({'defer_publish':True} if atomic else {})))
+                    if hasattr(engine,'run_steps'):iterators.append(engine.run_steps(module,cancel_event=self._event,on_progress=lambda p,index=index:report(index,p),**({'defer_publish':True} if atomic else {})))
                     else:
                         def compatibility(engine=engine,module=module):
                             if False:yield None
                             return engine.run(module,cancel_event=self._event)
                         iterators.append(compatibility())
-                while not all(done):
+                abort=False
+                while not all(done) and not abort:
                     if self._event.is_set() or not self.store.load_search_enabled():break
                     for index,(engine,iterator) in enumerate(zip(engines,iterators)):
                         if self._event.is_set() or not self.store.load_search_enabled():break
                         if done[index]:continue
-                        if latest[index] is not None and latest[index].stage=='publishing' and not engine.can_publish():continue
+                        if not atomic and latest[index] is not None and latest[index].stage=='publishing' and not engine.can_publish():continue
                         self._active=engine
                         try:latest[index]=next(iterator)
                         except StopIteration as complete:latest[index]=complete.value;done[index]=True
                         self.foreground_progress=[p for p in latest if p is not None]
+                        # An atomic issue cannot succeed after one module fails.
+                        # Unwind the other generators now instead of spending
+                        # hours preparing results which cannot be published.
+                        if atomic and latest[index] is not None and (latest[index].failed or (done[index] and latest[index].status not in ('ready','done','partial'))):
+                            abort=True
+                            for sibling in engines:sibling.abort_reason='另一榜单未完成，整份旧榜保留'
+                            break
                     self._renew_leases(search,lease)
                     if any(p and p.ai_started_at and not done[i] for i,p in enumerate(latest)):time.sleep(.05)
                 self.progress=[p for p,complete in zip(latest,done) if p is not None and complete]
@@ -204,6 +230,7 @@ class SearchJobs:
                         values.append(replace(value,recommendations=picks));leases.append(module_lease)
                         occupied.update(r.repo_id for r in picks)
                     try:
+                        self.foreground_progress=[replace(p,stage='publishing') for p in self.progress]
                         search.publish_all(tuple(values),tuple(leases),now=self.now(),cancel_event=self._event,refresh_lease=lease)
                     except Exception as exc:
                         self.progress=[replace(p,status='paused',stage='stopped',limited=True,notes=(*p.notes,str(exc)[:300])) for p in self.progress]

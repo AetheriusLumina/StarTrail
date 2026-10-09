@@ -19,6 +19,7 @@ class SearchSources:
         self.client,self.store,self.trending,self.trendshift,self.clock=client,store,trending,trendshift,clock
         self.free_events=free_events
         self.metadata_workers=4
+        self.official_page_ids=set()
         self.search=SearchStore(store);self.notes=[];self.limited=False;self.collected=0;self.pending_names=set()
 
     @property
@@ -36,6 +37,8 @@ class SearchSources:
 
     def _quota_stop(self):
         self._limited=True;self.quota_limited=True
+        event=getattr(self,'quota_event',None)
+        if event is not None:event.set()
         self.notes.append('本轮请求额度已到预留线；未处理候选和检索断点保留，下次更新继续')
 
     def _error(self,exc,budget):
@@ -108,6 +111,7 @@ class SearchSources:
             before=self.search.candidate_count(scope)
             observed=datetime.now().astimezone().isoformat()
             self.search.save_candidates(scope,tuple(ObservedRepository(r,observed) for r in page.items),())
+            if scope.section=='growth':self.official_page_ids.update(r.id for r in page.items)
             gain=max(0,self.search.candidate_count(scope)-before)
             productivity=self._query_yield(scope,term)
             self.search.save_cursor(scope,'github-yield:'+term,{'requests':productivity['requests']+1,'new_candidates':productivity['new_candidates']+gain})
@@ -251,7 +255,10 @@ class SearchSources:
             for offset in range(0,len(unresolved),20*workers):
                 if cancel_event.is_set():self.limited=True;return
                 if self.client.graphql_remaining==0:self._quota_stop();return
-                if not budget.can_spend('external',1,self.clock()):self.limited=True;return
+                if not budget.can_spend('external',1,self.clock()):
+                    if budget.quota_event is not None and budget.quota_event.is_set():self._quota_stop()
+                    else:self.limited=True
+                    return
                 wave=unresolved[offset:offset+20*workers]
                 chunks=[wave[i:i+20] for i in range(0,len(wave),20)]
                 futures=[pool.submit(self.client.get_repositories_batch,tuple(items[0].full_name for _,items in chunk)) for chunk in chunks]
@@ -285,6 +292,8 @@ class SearchSources:
 
     def refresh_candidates_steps(self,scope,budget,cancel_event,on_progress):
         """Refresh stale durable metadata in bounded official batches."""
+        if budget.quota_event is not None and budget.quota_event.is_set():
+            self._quota_stop();return
         batch=[]
         def resolve(rows, supplied=None):
             names=tuple(repo.full_name for repo in rows)
@@ -326,8 +335,16 @@ class SearchSources:
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='official-batch') as pool:
             for row in self.search.frontier(scope):
                 if cancel_event.is_set():return
+                if (parallel and self.client.graphql_remaining==0) or (not parallel and not budget.can_spend('core',1,self.clock())):
+                    self._quota_stop();return
+                if self.failed:return
+                if budget.quota_event is not None and budget.quota_event.is_set():
+                    self._quota_stop();return
                 if datetime.fromisoformat(row['observed_at']).astimezone().date().isoformat()==scope.local_date:continue
-                if not budget.can_spend('external',1,self.clock()):self.limited=True;return
+                if not budget.can_spend('external',1,self.clock()):
+                    if budget.quota_event is not None and budget.quota_event.is_set():self._quota_stop()
+                    else:self.limited=True
+                    return
                 batch.append(_repository(json.loads(row['payload'])))
                 if len(batch)==20*workers:
                     flush(batch,pool);batch=[];yield None
@@ -338,6 +355,8 @@ class SearchSources:
 
     def collect_steps(self,scope,expansion,ai_result,budget,cancel_event,on_progress):
         self.notes=[];self.limited=False;self.collected=0;self.source_status={};self.pending_names=set()
+        if budget.quota_event is not None and budget.quota_event.is_set():
+            self._quota_stop();return
         prior={name:getattr(self.client,name,None) for name in ('budget','clock')}
         if hasattr(self.client,'budget'):self.client.budget=budget;self.client.clock=self.clock
         candidates=list(ai_result.candidates) if ai_result else []
@@ -368,14 +387,8 @@ class SearchSources:
             if scope.section=='growth':
                 tracked=[r for r,_,_ in self.store.followed_repositories()]+self.store.recent_growth_repositories(scope.local_date,limit=200)
                 candidates.extend(DiscoveryCandidate(r.full_name,r.id,('tracked',),datetime.now().astimezone().isoformat()) for r in tracked)
-                # Full catalog is paged below. Never silently truncate resolved IDs.
-                with closing(self.store._connect()) as db:
-                    after=0
-                    while True:
-                        rows=db.execute("SELECT payload,observed_at,repo_id FROM search_candidates WHERE json_extract(scope_key,'$[0]')='growth' AND repo_id>? ORDER BY repo_id LIMIT 100",(after,)).fetchall()
-                        if not rows:break
-                        self.search.save_candidates(scope,tuple(ObservedRepository(_repository(json.loads(r['payload'])),r['observed_at']) for r in rows),())
-                        after=rows[-1]['repo_id']
+                # import_candidates already merged the durable frontier. Do not
+                # copy the active scope back into itself on every refresh.
                 if self.free_events and budget.can_spend('external',1,self.clock()):
                     self.free_events.budget=budget;self.free_events.clock=self.clock
                     try:
@@ -422,15 +435,17 @@ class SearchSources:
                     with closing(self.store._connect()) as db:
                         rows=db.execute('SELECT * FROM discovery_catalog WHERE catalog_key>? ORDER BY catalog_key LIMIT 100',(after,)).fetchall()
                     if not rows:break
-                    unresolved=[]
+                    if self.quota_limited or (budget.quota_event is not None and budget.quota_event.is_set()):break
+                    unresolved=[];resolved_rows=[]
                     for row in rows:
                         if row['cached_repo'] and row['repo_id']:
                             # Catalog provenance is not a metadata fetch timestamp.
                             # Force an official batch refresh unless this round has it.
                             repo=_repository(json.loads(row['cached_repo']))
                             if repo.id==row['repo_id']:
-                                self.search.save_candidates(scope,(ObservedRepository(repo,'1970-01-01T00:00:00+00:00'),),())
+                                resolved_rows.append(ObservedRepository(repo,'1970-01-01T00:00:00+00:00'))
                         else:unresolved.append(DiscoveryCandidate(row['full_name'],row['repo_id'],tuple(json.loads(row['source_names'])),row['discovered_at']))
+                    if resolved_rows:self.search.save_candidates(scope,tuple(resolved_rows),())
                     yield from self._collect_metadata_steps(unresolved,scope,budget,cancel_event,on_progress)
                     after=rows[-1]['catalog_key'];yield None
         finally:

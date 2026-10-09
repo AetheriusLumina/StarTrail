@@ -64,18 +64,24 @@ class SearchPage:
     incomplete_results: bool
 
 
+class RequestBudgetExceeded(ValueError):
+    """A request was refused before sending because the round budget ended."""
+
+
 @dataclass(slots=True)
 class RequestBudget:
     core_remaining: int | None
     search_remaining: int | None
     deadline: float
     core_reserve: int = 10
+    quota_event: object = field(default=None, repr=False, compare=False)
     _core_probe: bool = False
     _search_probe: bool = False
     _lock: object = field(default_factory=RLock, repr=False, compare=False)
 
     def can_spend(self, resource: str, cost: int, now: float) -> bool:
         with self._lock:
+            if self.quota_event is not None and self.quota_event.is_set():return False
             if isinstance(cost, bool) or cost < 1 or now >= self.deadline:
                 return False
             if resource == "external":
@@ -91,7 +97,7 @@ class RequestBudget:
     def spend(self, resource: str, cost: int, now: float) -> None:
         with self._lock:
             if not self.can_spend(resource, cost, now):
-                raise ValueError("请求预算或更新时间已到限制")
+                raise RequestBudgetExceeded("请求预算或更新时间已到限制")
             if resource == "external":
                 return
             field = resource + "_remaining"

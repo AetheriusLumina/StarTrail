@@ -27,6 +27,14 @@ class RadarStore:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "radar.db"
         with closing(self._connect()) as connection, connection:
+            # Reopening a current database is a read, not another migration.
+            # The schema cookie invalidates this marker after any external DDL.
+            if connection.execute('PRAGMA user_version').fetchone()[0] == 8:
+                cookie = connection.execute('PRAGMA schema_version').fetchone()[0]
+                marker = connection.execute("SELECT value FROM settings WHERE name='schema_cookie'").fetchone()
+                legacy = connection.execute("SELECT 1 FROM recommendations WHERE section='growth' AND display_role IS NULL AND metric_basis='github_daily_new' LIMIT 1").fetchone()
+                if marker and marker[0] == str(cookie) and not legacy:
+                    return
             connection.executescript(
                 """BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS keywords (
@@ -295,6 +303,9 @@ class RadarStore:
                 BEFORE DELETE ON recommendations BEGIN
                 INSERT OR IGNORE INTO displayed_repositories VALUES(OLD.repo_id,OLD.local_date); END""")
             self._migrate_legacy_growth(connection)
+            connection.execute('PRAGMA user_version=8')
+            cookie = connection.execute('PRAGMA schema_version').fetchone()[0]
+            connection.execute("INSERT INTO settings(name,value) VALUES('schema_cookie',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(cookie),))
 
     @staticmethod
     def _seen_before(connection: sqlite3.Connection, local_date: str) -> set[int]:

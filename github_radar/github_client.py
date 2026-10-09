@@ -178,6 +178,15 @@ class GitHubClient:
                               ("公开仓库目录持续积累；单批不是全站覆盖",))
 
     def get_repositories_batch(self,names):
+        # This GraphQL operation is a read-only query. Retry one dropped
+        # connection, never authorization, quota, schema or redirect failures.
+        for attempt in range(2):
+            try:return self._get_repositories_batch_once(names)
+            except GitHubRequestError as exc:
+                transport=exc.status is None and not isinstance(exc.__cause__,HTTPError) and isinstance(exc.__cause__,(URLError,TimeoutError,ConnectionError,HTTPException,OSError))
+                if attempt or not transport or (self.budget is not None and not self.budget.can_spend('external',1,self.clock())):raise
+
+    def _get_repositories_batch_once(self,names):
         """Bounded official totals/metadata. This is NOT a daily-Star batch."""
         names=tuple(dict.fromkeys(names))
         if not 1<=len(names)<=20 or any(not valid_repository_name(n) for n in names):raise ValueError('批量仓库名称无效')

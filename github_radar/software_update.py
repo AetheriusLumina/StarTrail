@@ -13,7 +13,7 @@ from urllib.request import Request,urlopen
 from urllib.parse import urlsplit
 
 REPOSITORY='AetheriusLumina/StarTrail'
-RELEASE_TAG='v0.5.0-preview.9'
+RELEASE_TAG='v0.5.0-preview.10'
 RELEASE_CHANNEL='preview'
 CHECK_INTERVAL=6*60*60
 API='https://api.github.com/repos/'+REPOSITORY+'/releases?per_page=100'
@@ -66,7 +66,8 @@ class ReleaseClient:
     def check(self,current=RELEASE_TAG,channel=RELEASE_CHANNEL):
         version(current)
         if channel not in ('stable','preview'):raise SoftwareUpdateError('更新渠道无效')
-        try:releases=json.loads(_read(self.opener,API,512*1024))
+        content=_read(self.opener,API,512*1024)
+        try:releases=json.loads(content)
         except (UnicodeError,ValueError) as exc:raise SoftwareUpdateError('软件发布信息格式有误') from exc
         if not isinstance(releases,list) or len(releases)>100:raise SoftwareUpdateError('软件发布列表格式有误')
         candidates=[]
