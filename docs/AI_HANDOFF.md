@@ -3,9 +3,9 @@
 此文档以当前源码为准；工程变化集中在 [开发日志](CHANGELOG.md)，环境和打包见 [开发指南](DEVELOPMENT.md)，用户操作见 [用户手册](USER_GUIDE.md)。接续时先读根目录 AGENTS.md，再核对 Git 状态和实际代码。
 
 
-当前preview.11已发布，源码7469bc6，云包已完整下载校验：默认core_reserve=0。RequestBudget按资源记录服务器reset窗口，忽略旧窗口迟到响应；本地估算归零时通过GitHubClient.reconcile_quota读取不消耗主额度的/rate_limit，确认实际余额，有额度继续，确认0或明确限流才整轮收尾。不能把未知额度、缓存命中、网络或保存失败归类额度成功。原始服务器额度及限流事件写入search_refresh_timing，不暴露凭证。真实客户端只在实际网络请求边界扣费，模拟客户端自行模拟该边界。publish_all允许有效任务跨一个本地零点保存到启动日期，仍检查UTC统计日、代次、配置、观测日期及取消。跨日404按本轮日期标记，不阻塞其他仓库。失败摘要跳过来源数量和兄弟榜单中止，优先报告根因。正式数据只读，不自动执行安装器。
+当前preview.12已发布，发行源码477a71f，云包已完整下载校验（183774512字节，摘要及验收见CHANGELOG）。来源优先和同日历史修复见下节。此前preview.11实际额度修复继续保留：默认core_reserve=0。RequestBudget按资源记录服务器reset窗口，忽略旧窗口迟到响应；本地估算归零时通过GitHubClient.reconcile_quota读取不消耗主额度的/rate_limit，确认实际余额，有额度继续，确认0或明确限流才整轮收尾。不能把未知额度、缓存命中、网络或保存失败归类额度成功。原始服务器额度及限流事件写入search_refresh_timing，不暴露凭证。真实客户端只在实际网络请求边界扣费，模拟客户端自行模拟该边界。publish_all允许有效任务跨一个本地零点保存到启动日期，仍检查UTC统计日、代次、配置、观测日期及取消。跨日404按本轮日期标记，不阻塞其他仓库。失败摘要跳过来源数量和兄弟榜单中止，优先报告根因。正式数据只读，不自动执行安装器。
 
-## preview.12 待发布修复：来源优先与展示历史
+## preview.12 来源优先与展示历史
 
 按维护者确认，增长保留已结束的完整 UTC 日，处理优先级为 GitHub Trending → Trendshift → 本地持久候选；网站今日数不混入完整日排序。search_sources 在广泛搜索前按来源层级解析当前候选并让出核算机会，含已缓存和未知元数据混合情形；search_local 在采集与旧库刷新每批就绪时消费 official_page_ids，避免仅刷新元数据耗尽额度。search_storage.growth_frontier(scope, only_ids=None) 全量和子集都恢复来源优先，SQL 仍分批读载荷，最后数学排序不变。
 
