@@ -28,6 +28,12 @@ py -3.13 -m venv .venv
 
 自选已准备的模型目录通过 `STARTRAIL_MODEL_DIR` 指定；它包含 `en-zh/`、`zh-en/` 和 `manifest.json`。冻结安装版使用内部模型，忽略开发环境覆盖。GitHub 登录可选，公开 Client ID 不是密钥；Fork 发布者可以用 `GITHUB_RADAR_OAUTH_CLIENT_ID` 配置自己的设备流程应用。绝不能分发 Client Secret 或个人 Token。
 
+我建议开发者在隔离开发实例的设置中登录自己的 GitHub 账号并连接 Codex，再进行真实联网和 AI 功能验收；浏览器登录不等于应用授权。自动回归仍使用隔离数据和模拟服务，不要求私人凭证或付费调用。不要提交 Token、账号配置或 UserData。
+
+## 说明文件维护
+
+给用户、开发者和接续 AI 阅读的说明统一使用 Markdown。用户手册只维护 `docs/USER_GUIDE.md`；构建时原样复制为安装目录 `使用说明.md`，升级删除旧程序自带的 `使用说明.txt`，不处理个人数据。`requirements/constraints.txt`、`SHA256SUMS.txt`、备份及卸载标记是程序接口格式，第三方法律原文保持上游格式；不能为改扩展名破坏现有更新器兼容。
+
 ## 修改位置
 
 | 工作 | 主要模块 |

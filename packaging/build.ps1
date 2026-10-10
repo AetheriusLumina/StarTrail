@@ -69,7 +69,7 @@ Copy-Item -LiteralPath (Join-Path $stageRoot 'GitHubRadar.exe') `
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'UserData') -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $stageRoot 'UserData\.github-radar-data') `
     -Value 'GitHub Radar personal data v1' -Encoding utf8
-Copy-Item -LiteralPath (Join-Path $sourceRoot '使用说明.txt') -Destination $stageRoot -Force
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'docs\USER_GUIDE.md') -Destination (Join-Path $stageRoot '使用说明.md') -Force
 
 & (Join-Path $sourceRoot 'tests\windows_delivery_check.ps1') -StagingPath $stageRoot
 if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {

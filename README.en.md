@@ -26,9 +26,10 @@ No Python, Node.js, or development tools are needed to use the installer.
 
 1. Download **StarTrail_Setup.exe** from [Releases](https://github.com/AetheriusLumina/StarTrail/releases). The same page provides SHA256 checksums and the user guide.
 2. Install and launch through the desktop shortcut. The reader opens in the default browser.
-3. Use **Update now**, add a keyword, and switch between Star growth and keyword results.
-4. Open a project, generate an explanation when needed, and follow or classify it. Revisit History and Following later.
-5. Settings manage keywords, text size, motion, scheduled updates, GitHub authorization, and Codex connection.
+3. I recommend signing in to GitHub and connecting Codex in the app settings before you start. GitHub authorization increases the official API allowance; Codex supports keyword expansion and manual project explanations. Local translation uses no Codex quota. Signing in through a browser does not authorize the app.
+4. Use **Update now**, add a keyword, and switch between Star growth and keyword results.
+5. Open a project, generate an explanation when needed, and follow or classify it. Revisit History and Following later.
+6. Settings manage keywords, text size, motion, scheduled updates, GitHub authorization, and Codex connection.
 
 <details>
 <summary>Software upgrades and existing data</summary>

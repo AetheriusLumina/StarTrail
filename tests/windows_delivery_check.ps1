@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $stage -PathType Container)) {
     throw "STAGING_MISSING: $stage"
 }
 
-$expected = @('AppFiles', 'GitHubRadar.exe', 'Uninstall.exe', 'UserData', '使用说明.txt')
+$expected = @('AppFiles', 'GitHubRadar.exe', 'Uninstall.exe', 'UserData', '使用说明.md')
 $actual = @(Get-ChildItem -LiteralPath $stage -Force | ForEach-Object Name | Sort-Object)
 $missing = @($expected | Where-Object { $_ -notin $actual })
 $extra = @($actual | Where-Object { $_ -notin $expected })

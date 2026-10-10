@@ -56,9 +56,13 @@ Name: "{app}\UserData"; Flags: uninsneveruninstall
 [Files]
 Source: "{#SourcePath}\GitHubRadar.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourcePath}\Uninstall.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\使用说明.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourcePath}\UserData\.github-radar-data"; DestDir: "{app}\UserData"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "{#SourcePath}\AppFiles\*"; DestDir: "{app}\AppFiles"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; Remove only the obsolete app-owned guide; personal data is never targeted.
+Type: files; Name: "{app}\使用说明.txt"
 
 [UninstallDelete]
 Type: files; Name: "{app}\AppFiles\github-radar-uninstaller.txt"

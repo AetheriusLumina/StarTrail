@@ -5,6 +5,20 @@ from pathlib import Path
 
 
 class InstallerDataSafetyTests(unittest.TestCase):
+    def test_single_markdown_user_guide_is_packaged_and_legacy_copy_removed(self):
+        root = Path(__file__).resolve().parents[1]
+        build = (root / "packaging/build.ps1").read_text(encoding="utf-8")
+        script = (root / "packaging/GitHubRadar.iss").read_text(encoding="utf-8")
+        self.assertFalse((root / "使用说明.txt").exists())
+        self.assertIn("docs\\USER_GUIDE.md", build)
+        self.assertIn("使用说明.md", build)
+        files = script.split("[Files]", 1)[1].split("[InstallDelete]", 1)[0]
+        self.assertIn("使用说明.md", files)
+        self.assertNotIn("使用说明.txt", files)
+        cleanup = script.split("[InstallDelete]", 1)[1].split("[UninstallDelete]", 1)[0]
+        self.assertIn('Type: files; Name: "{app}\\使用说明.txt"', cleanup)
+        self.assertNotIn("UserData", cleanup)
+
     def test_existing_userdata_requires_installer_marker(self):
         root = Path(__file__).resolve().parents[1]
         script = (root / "packaging" / "GitHubRadar.iss").read_text(encoding="utf-8")
