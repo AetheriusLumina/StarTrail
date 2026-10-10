@@ -74,6 +74,47 @@ class ProjectTranslationTests(unittest.TestCase):
         self.assertFalse(worker._thread.is_alive())
         self.assertEqual(active, [])
 
+    def test_close_waits_for_enqueue_to_finish_starting_thread(self):
+        from unittest.mock import patch
+        real_thread = threading.Thread
+        starting, release_start, close_done = (threading.Event() for _ in range(3))
+        errors = []
+        worker = ProjectPretranslator(None, None, None)
+
+        class DelayedStart(real_thread):
+            def start(inner):
+                starting.set()
+                if not release_start.wait(2):
+                    raise AssertionError('test did not release thread start')
+                super().start()
+
+        def close_worker():
+            try:
+                worker.close()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                close_done.set()
+
+        with patch('github_radar.project_translation.threading.Thread', DelayedStart):
+            producer = real_thread(target=worker.enqueue, args=([1],))
+            closer = real_thread(target=close_worker)
+            producer.start()
+            try:
+                self.assertTrue(starting.wait(1))
+                closer.start()
+                self.assertTrue(worker._stop.wait(1))
+                self.assertFalse(close_done.wait(.1), 'close must wait until start finishes')
+            finally:
+                release_start.set()
+                producer.join(2)
+                if closer.ident is not None:
+                    closer.join(2)
+                worker.close()
+        self.assertEqual(errors, [])
+        self.assertTrue(close_done.is_set())
+        self.assertFalse(worker._thread.is_alive())
+
     def test_failure_does_not_stop_next_selected_repository(self):
         calls = []
         worker, loaded = self.make_worker(lambda target, items, cancel: (_ for _ in ()).throw(RuntimeError('model unavailable')))

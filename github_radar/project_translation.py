@@ -208,7 +208,11 @@ class ProjectPretranslator:
     def close(self):
         self._stop.set(); self._wake.set()
         if self._job: self.translation.cancel(self._job)
-        if self._thread: self._thread.join(timeout=1.5)
+        # enqueue publishes the thread and starts it under the same lock.
+        # Synchronize before joining, then release the lock so the worker can exit.
+        with self._lock:
+            thread = self._thread
+        if thread: thread.join(timeout=1.5)
 
 
 def warm_selected(store, client, *, worker=None):
