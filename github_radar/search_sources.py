@@ -210,6 +210,7 @@ class SearchSources:
                 if known and (candidate.repo_id is None or candidate.repo_id==known.repo.id):
                     self._accept_candidate(candidate,known.repo)
                     if scope.section=='keyword' and key in getattr(self,'_ai_names',set()):self.search.save_match(scope,known.repo,scope.term,'ai_search',known.observed_at)
+                    if scope.section=="growth":self.official_page_ids.add(known.repo.id)
                     resolved[key]=known;index+=1;continue
                 if not budget.can_spend('core',1,self.clock()):
                     self.notes.append('GitHub 元数据请求额度或时间预算不足，未核实候选已保留；额度恢复后可继续更新')
@@ -245,6 +246,7 @@ class SearchSources:
                         if scope.section=='keyword' and candidate.full_name.casefold() in getattr(self,'_ai_names',set()):self.search.save_match(scope,observation.repo,scope.term,'ai_search',observation.observed_at)
                         resolved[candidate.full_name.casefold()]=observation
                         self.search.save_candidates(scope,(observation,),())
+                        if scope.section=="growth":self.official_page_ids.add(observation.repo.id)
                         self.collected+=1;on_progress('collecting',self.collected)
                 yield None
 
@@ -259,7 +261,10 @@ class SearchSources:
             known=self.search.observation_named_today(scope,items[0].full_name)
             if known and all(c.repo_id is None or c.repo_id==known.repo.id for c in items):
                 for candidate in items:self._accept_candidate(candidate,known.repo)
+                if scope.section=="growth":self.official_page_ids.add(known.repo.id)
             else:unresolved.append((key,items))
+        if scope.section=='growth' and self.official_page_ids:
+            yield None  # Score cached identities before the next network wave.
         workers=min(4,max(1,self.metadata_workers))
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='source-batch') as pool:
             for offset in range(0,len(unresolved),20*workers):
@@ -297,6 +302,7 @@ class SearchSources:
                                 if scope.section=='keyword' and key in getattr(self,'_ai_names',set()):self.search.save_match(scope,item.repo,scope.term,'ai_search',item.observed_at)
                             else:self.limited=True
                     self.search.save_candidates(scope,observations,())
+                    if scope.section=="growth":self.official_page_ids.update(o.repo.id for o in observations)
                     self.collected+=len({o.repo.id for o in observations});on_progress('collecting',self.collected)
                 yield None
 
@@ -323,12 +329,16 @@ class SearchSources:
                             continue
                     candidate=DiscoveryCandidate(repo.full_name,repo.id,('tracked',),self.now().isoformat())
                     item=self._accept_candidate(candidate,updated)
-                    if item:self.search.save_candidates(scope,(item,),())
+                    if item:
+                        self.search.save_candidates(scope,(item,),())
+                        if scope.section=="growth":self.official_page_ids.add(item.repo.id)
                     else:self.limited=True
             else:
                 for repo in rows:
                     item=self.resolve_candidate(DiscoveryCandidate(repo.full_name,repo.id,('tracked',),self.now().isoformat()),budget)
-                    if item:self.search.save_candidates(scope,(item,),())
+                    if item:
+                        self.search.save_candidates(scope,(item,),())
+                        if scope.section=="growth":self.official_page_ids.add(item.repo.id)
                     elif not self.search.unavailable(repo.id,scope.local_date) and not self.quota_limited:self.limited=True
         parallel=isinstance(self.client,GitHubClient) and bool(self.client._authorization())
         workers=min(4,max(1,self.metadata_workers)) if parallel else 1
@@ -344,7 +354,8 @@ class SearchSources:
         # At most four official requests overlap. Each still carries twenty
         # repositories; all evidence and SQLite writes stay on this thread.
         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='official-batch') as pool:
-            for row in self.search.frontier(scope):
+            frontier=self.search.growth_frontier(scope) if scope.section=="growth" else self.search.frontier(scope)
+            for row in frontier:
                 if cancel_event.is_set():return
                 if parallel and self.client.graphql_remaining==0:self._quota_stop();return
                 if not parallel and not budget.can_spend('core',1,self.clock()):
@@ -411,6 +422,26 @@ class SearchSources:
                     except (SourceRequestError,ValueError,OSError) as exc:
                         self.notes.append('public_activity: '+str(exc));self.source_status['public_activity']={'status':'failed','count':0}
             yield None
+            # Resolve current trends and previous leaders before broad search
+            # can exhaust the shared quota. Yield each batch for daily scoring;
+            # source popularity remains discovery evidence, never the metric.
+            if scope.section=='growth' and candidates:
+                # Metadata and daily statistics share the same discovery order;
+                # final ranking still uses verified UTC-day growth only.
+                def priority(candidate):
+                    if 'github_trending' in candidate.source_names:return 0
+                    if any(n in candidate.source_names for n in ('trendshift_daily','trendshift_github_today')):return 1
+                    return 2
+                candidates.sort(key=priority)
+                self.store.save_discovery_batch(DiscoveryBatch('public_candidates',tuple(candidates),None,True,()))
+                # Finish each source tier before requesting lower-priority
+                # metadata, including mixtures of cached and unknown identities.
+                for tier in range(3):
+                    current=[candidate for candidate in candidates if priority(candidate)==tier]
+                    if current:
+                        yield from self._collect_metadata_steps(current,scope,budget,cancel_event,on_progress)
+                        yield None  # Cached metadata also needs a scoring turn.
+
             terms=(scope.term,*(expansion.terms if expansion else ())) if scope.section=='keyword' else ('',)
             # Daily growth keeps the established recent-discovery window. Old
             # IDs are still refreshed and ranked from the durable full catalog.
@@ -441,7 +472,8 @@ class SearchSources:
             # Retain unverified source identities before spending official quota.
             # Their external metadata is not inserted into the ranked frontier.
             if candidates:self.store.save_discovery_batch(DiscoveryBatch('public_candidates',tuple(candidates),None,True,()))
-            yield from self._collect_metadata_steps(candidates,scope,budget,cancel_event,on_progress)
+            if scope.section!='growth':
+                yield from self._collect_metadata_steps(candidates,scope,budget,cancel_event,on_progress)
             if scope.section=='growth':
                 after=''
                 while not cancel_event.is_set():

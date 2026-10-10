@@ -319,6 +319,22 @@ class RadarStore:
         with closing(self._connect()) as connection:
             return self._seen_before(connection, local_date)
 
+    def seen_growth_repo_ids(self, local_date: str) -> set[int]:
+        """Remember replaced same-day cards, retaining this issue's new roles.
+
+        Current new discoveries stay new on repeat refreshes. Once a card has
+        left the issue, its durable visibility ledger prevents a second first
+        discovery. Older-day history always wins, including renamed stable IDs.
+        """
+        with closing(self._connect()) as connection:
+            prior = self._seen_before(connection, local_date)
+            today = {r[0] for r in connection.execute(
+                'SELECT repo_id FROM displayed_repositories WHERE local_date=?', (local_date,))}
+            current_new = {r[0] for r in connection.execute(
+                "SELECT repo_id FROM recommendations WHERE local_date=? AND section='growth' AND display_role='new'",
+                (local_date,))}
+            return prior | (today - current_new)
+
     def growth_repair_pending(self, local_date: str) -> bool:
         with closing(self._connect()) as connection:
             return connection.execute('SELECT 1 FROM legacy_growth_repairs WHERE local_date=?',

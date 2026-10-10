@@ -12,6 +12,55 @@ from github_radar.models import OfficialStarWeek,StarDay,StarSnapshot,Recommenda
 from tests.test_storage import repository
 
 class LocalDiscoveryTests(unittest.TestCase):
+ def test_growth_measures_each_refreshed_metadata_batch_before_next_batch(self):
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  engine=self.engine(0);engine.sources.official_page_ids=set();order=[]
+  def refresh(*args):
+   for i in (1,2):
+    if i==2:self.assertEqual(order,[1],'first batch must be measured before reading the second')
+    engine.search.save_candidates(scope,(ObservedRepository(replace(repository(i,2000),full_name="org/project-"+str(i)),self.now.isoformat()),),())
+    engine.sources.official_page_ids.add(i)
+    yield None
+  engine.sources.refresh_candidates_steps=refresh
+  def history(name):
+   order.append(int(name.rsplit('-',1)[1]))
+   return [OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(300,0,0,0,0,0,0))]
+  engine.client.star_history_weeks=history
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes);self.assertEqual(order,[1,2])
+
+ def test_same_day_replaced_discovery_cannot_be_a_new_discovery_again(self):
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  self.store.commit_daily(scope.local_date,[repository(1,2000)],[],[Recommendation(1,scope.local_date,'growth',None,400,None,self.now.isoformat(),'github_daily_new',scope.stat_date,1,'new')],completed_at=self.now.isoformat())
+  with closing(self.store._connect()) as db,db:db.execute('DELETE FROM recommendations')
+  engine=self.engine(6)
+  engine.sources.collect=lambda *args:engine.search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,2000),full_name="org/project-"+str(i)),self.now.isoformat()) for i in range(1,7)),())
+  engine.client.star_history_weeks=lambda name:[OfficialStarWeek(int(datetime(2026,10,4,tzinfo=timezone.utc).timestamp()),(400 if name.endswith('-1') else 100,0,0,0,0,0,0))]
+  p=engine.run(scope)
+  self.assertEqual(p.status,'done',p.notes)
+  picks=self.store.daily_recommendations(scope.local_date)
+  self.assertEqual(next(r.display_role for r in picks if r.repo_id==1),'old')
+  self.assertEqual(sum(r.display_role=='new' for r in picks),5)
+
+ def test_repeat_refresh_keeps_current_new_roles_but_prior_day_history_wins(self):
+  day=self.scope.local_date;at=self.now.isoformat()
+  self.store.commit_daily('2026-10-04',[repository(1,2000)],[],[Recommendation(1,'2026-10-04','growth',None,300,None,'2026-10-04T12:00:00Z')])
+  self.store.commit_daily(day,[repository(1,2000),repository(2,2000)],[],[Recommendation(i,day,'growth',None,300,None,at,'github_daily_new','2026-10-04',i,'new') for i in (1,2)])
+  seen=self.store.seen_growth_repo_ids(day)
+  self.assertIn(1,seen);self.assertNotIn(2,seen)
+
+ def test_official_trending_precedes_trendshift_and_local_library_in_subset(self):
+  from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate,SourceEvidence
+  scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
+  search=SearchStore(self.store)
+  search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000-i),full_name='org/r'+str(i)),self.now.isoformat()) for i in (1,2,3)),())
+  for identity,source in ((2,'trendshift_daily'),(3,'github_trending')):
+   evidence=SourceEvidence(source_name=source,source_url='https://github.com/trending' if source=='github_trending' else 'https://trendshift.io/',full_name='org/r'+str(identity),observed_at=self.now.isoformat(),repo_id=identity,period='day',stat_date=scope.stat_date,rank_kind='source',source_rank=1,total_stars_text=None,daily_added_text=None)
+   candidate=DiscoveryCandidate(evidence.full_name,identity,(source,),evidence.observed_at,evidence=(evidence,))
+   self.store.save_discovery_batch(DiscoveryBatch(source,(candidate,),None,True,()))
+  self.assertEqual([row['repo_id'] for row in search.growth_frontier(scope)],[3,2,1])
+  self.assertEqual([row['repo_id'] for row in search.growth_frontier(scope,only_ids=(1,2,3))],[3,2,1])
+
  def test_old_trend_not_promoted_by_today_metadata_refresh(self):
   from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
@@ -43,7 +92,7 @@ class LocalDiscoveryTests(unittest.TestCase):
   from github_radar.discovery_types import DiscoveryBatch,DiscoveryCandidate
   scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-04')
   engine=self.engine(4);engine.client.core_remaining=1;calls=[]
-  engine.sources.collect=lambda *args:engine.search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000+i),full_name='org/r'+str(i)),self.now.isoformat()) for i in range(1,5)),())
+  engine.sources.collect=lambda *args:engine.search.save_candidates(scope,tuple(ObservedRepository(replace(repository(i,10000-i),full_name='org/r'+str(i)),self.now.isoformat()) for i in range(1,5)),())
   from github_radar.discovery_types import SourceEvidence
   evidence=SourceEvidence(source_name='trendshift_daily',source_url='https://trendshift.io/',full_name='org/r1',observed_at=self.now.isoformat(),repo_id=1,period='day',stat_date=scope.stat_date,rank_kind='source',source_rank=1,total_stars_text=None,daily_added_text=None,evidence_text='trend')
   self.store.save_discovery_batch(DiscoveryBatch('trendshift_daily',(DiscoveryCandidate('org/r1',1,('trendshift_daily',),self.now.isoformat(),evidence=(evidence,)),),None,True,()))

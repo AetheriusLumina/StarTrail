@@ -387,8 +387,9 @@ class SearchCoordinator:
             for row in self.search.frontier(scope):yield row,None
             return
         if only_ids is not None:
-            with closing(self.store._connect()) as db:
-                subset=db.execute('SELECT repo_id,payload,observed_at FROM search_candidates WHERE scope_key=? AND repo_id IN ('+','.join('?' for _ in only_ids)+')',(scope_key(scope),*only_ids)).fetchall() if only_ids else []
+            # Batch identities are a set; restore source priority before spending
+            # a possibly scarce final request on daily statistics.
+            subset=list(self.search.growth_frontier(scope,only_ids=only_ids))
             total=sum(not json.loads(row['payload'])['archived'] and json.loads(row['payload'])['stars']>=scope.min_stars for row in subset)
         else:
             with closing(self.store._connect()) as db:

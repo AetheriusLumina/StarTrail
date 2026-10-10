@@ -10,6 +10,53 @@ from github_radar.discovery_types import SearchPage,RequestBudget,DiscoveryCandi
 from tests.test_storage import repository
 
 class SearchSourcesTests(unittest.TestCase):
+    def test_growth_trend_metadata_is_ready_before_broad_official_search(self):
+        from types import SimpleNamespace
+        from datetime import datetime,timezone
+        events=[];scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-03')
+        repo=replace(repository(99,2000),full_name='org/trending')
+        def get(name):events.append('metadata');return repo
+        def page(*a,**kw):
+            events.append('search')
+            self.assertGreater(SearchStore(self.store).candidate_count(scope),0,'trend must be resolved before search consumes quota')
+            return SearchPage((),0,False)
+        source=SearchSources(SimpleNamespace(get_repository=get,search_page=page),self.store,SimpleNamespace(repo_names=lambda:('org/trending',)),None,lambda:0)
+        source.now=lambda:datetime(2026,10,4,10,tzinfo=timezone.utc)
+        it=source.collect_steps(scope,None,None,self.budget,threading.Event(),lambda *a:None)
+        next(it)
+        while 'metadata' not in events:next(it)
+        self.assertNotIn('search',events)
+        self.assertIn(99,source.official_page_ids,'resolved trends must be offered to immediate daily measurement')
+        list(it)
+
+    def test_current_trend_metadata_yields_for_scoring_before_any_search(self):
+        from types import SimpleNamespace
+        from datetime import datetime,timezone
+        from github_radar.search_types import ObservedRepository
+        scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-03')
+        now=datetime(2026,10,4,10,tzinfo=timezone.utc);repo=replace(repository(99,2000),full_name='org/trending')
+        SearchStore(self.store).save_candidates(scope,(ObservedRepository(repo,now.isoformat()),),())
+        def forbidden(*a,**kw):raise AssertionError('search must wait for current trend scoring')
+        source=SearchSources(SimpleNamespace(get_repository=forbidden,search_page=forbidden),self.store,SimpleNamespace(repo_names=lambda:('org/trending',)),None,lambda:0)
+        source.now=lambda:now
+        it=source.collect_steps(scope,None,None,self.budget,threading.Event(),lambda *a:None)
+        next(it);next(it)
+        self.assertEqual(source.official_page_ids,{99});it.close()
+
+    def test_cached_trending_yields_before_unresolved_source_metadata(self):
+        from types import SimpleNamespace
+        from datetime import datetime,timezone
+        from github_radar.search_types import ObservedRepository
+        scope=replace(self.scope,section='growth',keyword_id=None,term='',min_stars=100,stat_date='2026-10-03')
+        now=datetime(2026,10,4,10,tzinfo=timezone.utc);repo=replace(repository(99,2000),full_name='org/trending')
+        SearchStore(self.store).save_candidates(scope,(ObservedRepository(repo,now.isoformat()),),())
+        def forbidden(*a,**kw):raise AssertionError('cached Trending must be scored before unresolved lower-priority metadata')
+        source=SearchSources(SimpleNamespace(graphql_remaining=100,get_repositories_batch=forbidden),self.store,None,None,lambda:0)
+        source.now=lambda:now
+        candidates=(DiscoveryCandidate('org/trending',99,('github_trending',),now.isoformat()),DiscoveryCandidate('org/secondary',None,('trendshift_daily',),now.isoformat()))
+        it=source._collect_authenticated_metadata_steps(candidates,scope,self.budget,threading.Event(),lambda *a:None)
+        next(it);self.assertEqual(source.official_page_ids,{99});it.close()
+
     def test_trending_save_error_is_not_swallowed_as_auxiliary_network_failure(self):
         import sqlite3
         from types import SimpleNamespace

@@ -109,6 +109,14 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         if hasattr(e.sources,'refresh_candidates_steps'):
             for _ in e.sources.refresh_candidates_steps(scope,budget,event,lambda stage,count:tick(stage=stage,collected=count)):
                 check_source_failure();yield p
+                # Score a refreshed bounded batch before requesting another.
+                # A large metadata walk must not consume the entire allowance
+                # before any current-trend daily facts become publishable.
+                ids=getattr(e.sources,'official_page_ids',None)
+                if scope.section=='growth' and ids:
+                    page_ids=tuple(ids);ids.clear()
+                    for _row,_day in e._frontier(scope,budget,tick,event,only_ids=page_ids):
+                        if _row is None:yield p
         check_source_failure()
         tick(candidate_pool=e.search.candidate_count(scope),source_status=dict(getattr(e.sources,'source_status',{})));yield p
         if prepare_only:
@@ -145,7 +153,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         snapshots=tuple(StarSnapshot(o.repo.id,scope.local_date,o.repo.stars,o.observed_at) for o in observations)
         coverage=GrowthCoverage(p.candidate_pool,p.official_checked,('github_search','github_trending','trendshift'),scope.stat_date,'github_daily_new',stop_reasons=p.notes) if scope.section=='growth' else None
         def ranked(occupied,own=()):
-            seen=e.store.seen_repo_ids_before(scope.local_date)
+            seen=(e.store.seen_growth_repo_ids(scope.local_date) if scope.section=="growth" else e.store.seen_repo_ids_before(scope.local_date))
             return select_keyword_candidates(scope,prepared,verdicts,seen,occupied,own) if scope.section=='keyword' else select_growth_candidates(scope,prepared,daily,None,seen,occupied)
         e.rerank=ranked
         current=e.store.daily_recommendations(scope.local_date);own={r.repo_id for r in current if r.section==scope.section and r.keyword_id==scope.keyword_id}

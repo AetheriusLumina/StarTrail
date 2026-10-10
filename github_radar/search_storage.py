@@ -398,28 +398,35 @@ class SearchStore:
                 db.execute('DELETE FROM recommendations WHERE local_date=? AND section=? AND COALESCE(keyword_id,0)=?',(value.scope.local_date,value.scope.section,value.scope.keyword_id or 0))
             for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db,_allow_rollover=True)
 
-    def growth_frontier(self,scope):
+    def growth_frontier(self,scope,*,only_ids=None):
         """Prioritize current trends and previous leaders, then rotate old work.
 
         Freeze identities only: network writes may change last_scored_at during
         the scan. Payloads stay in SQLite and are read a hundred at a time.
         Priority is scheduling, never the final daily-growth ranking.
         """
+        if only_ids is not None:
+            only_ids=tuple(dict.fromkeys(only_ids))
+            if not only_ids:return
+        subset_sql=' AND c.repo_id IN ('+','.join('?' for _ in only_ids)+')' if only_ids is not None else ''
         with closing(self.store._connect()) as db:
             identities=[r[0] for r in db.execute("""
                 SELECT c.repo_id FROM search_candidates c
                 LEFT JOIN discovery_catalog d ON d.repo_id=c.repo_id
-                WHERE c.scope_key=?
+                WHERE c.scope_key=?"""+subset_sql+"""
                 GROUP BY c.repo_id
                 ORDER BY CASE
                   WHEN EXISTS(SELECT 1 FROM source_evidence e WHERE e.repo_id=c.repo_id
                     AND substr(e.observed_at,1,10) IN (?,?)
-                    AND (e.source_name='github_trending' OR e.source_name='trendshift_daily')) THEN 0
+                    AND e.source_name='github_trending') THEN 0
+                  WHEN EXISTS(SELECT 1 FROM source_evidence e WHERE e.repo_id=c.repo_id
+                    AND substr(e.observed_at,1,10) IN (?,?)
+                    AND e.source_name IN ('trendshift_daily','trendshift_github_today')) THEN 1
                   WHEN c.repo_id IN (SELECT repo_id FROM recommendations WHERE section='growth'
-                    AND local_date=(SELECT MAX(local_date) FROM recommendations WHERE section='growth' AND local_date<?)) THEN 1
-                  ELSE 2 END,
+                    AND local_date=(SELECT MAX(local_date) FROM recommendations WHERE section='growth' AND local_date<?)) THEN 2
+                  ELSE 3 END,
                   COALESCE(MAX(d.last_scored_at),''),json_extract(c.payload,'$.stars') DESC,c.repo_id
-                """,(scope_key(scope),scope.local_date,scope.stat_date,scope.local_date))]
+                """,(scope_key(scope),*(only_ids or ()),scope.local_date,scope.stat_date,scope.local_date,scope.stat_date,scope.local_date))]
         for offset in range(0,len(identities),100):
             ids=identities[offset:offset+100]
             with closing(self.store._connect()) as db:

@@ -196,3 +196,9 @@ README 截图集中在 `docs/images/`，展示实际使用时保存的项目与�
 ### 实际额度与跨日回归
 
 运行 `python -m unittest tests.test_actual_quota tests.test_lock_scale tests.test_update_recovery`。新增测试覆盖最后10次可用额度、未知额度不可冒充限流、新窗口恢复、迟到旧窗口忽略、/rate_limit确认正余额继续与零余额停止、跨日保存及旧观测拒绝、跨日404和失败根因摘要。实际联网日志必须同时比较原始服务器余额、reset_at、HTTP限流和本地计数；不能仅凭quota_limited字段验收。多榜合作恢复生成器时同步窗口，实际请求结束后再切换预算。详细时间分阶段记录，AI扩词缓存命中0秒不可称新AI测速。
+
+### 来源优先与新发现回归
+
+运行 `python -m unittest tests.test_search_sources tests.test_search_local`。当前增长来源优先级：GitHub Trending、Trendshift、本地候选；发现优先级不参与最终数学排序。`growth_frontier(scope, only_ids=...)` 用于恢复批次集合的调度顺序；认证元数据已缓存身份必须先让出日增机会，再处理同层未知资料，来源层级间也必须让出机会。每批刷新旧库元数据后同样穿插日增，不可退回“大库全部读完再核算”。
+
+`seen_growth_repo_ids` 区分旧日期已展示、当日仍在榜 new 和当日移出后的身份；沿用稳定仓库 ID 和展示账本，不按名称或“加入候选库”代替展示历史。验收必须覆盖重复刷新、同日替换后返回、过去日期记录优先、候选未展示仍可入选、来源优先与日增排序互不替代。真实联网记录至少核对当前趋势已核算、最终发表两榜、历史角色和服务器首次实际额度限制；仅测试假客户端或缓存续跑不能证明首次联网效果。
