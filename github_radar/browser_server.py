@@ -1174,7 +1174,7 @@ class BrowserServer:
                     card["ai_status"] = verdict.verdict if verdict else "basic"
                     card["ai_reason"] = verdict.reason if verdict else ""
                     if verdict and verdict.verdict=='relevant':
-                        if verdict.reason.startswith('检索匹配：'):card['ai_status']='search_matched'
+                        if verdict.reason.startswith(('检索匹配：','名称或主题匹配：','网站主题匹配：')):card['ai_status']='search_matched'
                         elif verdict.reason.startswith('AI 搜索依据：'):card['ai_status']='ai_discovered'
                     keyword_cards.setdefault(recommendation.keyword_id or 0, []).append(card)
                 cards.append(card)

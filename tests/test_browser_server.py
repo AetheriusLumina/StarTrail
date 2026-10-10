@@ -1106,6 +1106,18 @@ class BrowserServerTests(unittest.TestCase):
         self.assertTrue(ai.cancelled)
         self.assertEqual([item.repo_id for item in self.store.latest_recommendations()], original)
 
+    def test_local_keyword_evidence_is_not_labeled_ai_verified(self):
+        from unittest.mock import patch
+        self.save_issue()
+        for reason in ('检索匹配：local ai', '名称或主题匹配：local ai', '网站主题匹配：local ai'):
+            with self.subTest(reason=reason), patch('github_radar.search_storage.SearchStore.keyword_verdicts', return_value={4: RelevanceVerdict(4, 'relevant', reason)}):
+                card = json.loads(self.get('/api/issue')[2])['keyword_groups'][0]['cards'][0]
+                self.assertEqual(card['ai_status'], 'search_matched')
+                self.assertEqual(card['ai_reason'], reason)
+        for reason, expected in (('AI 搜索依据：local ai', 'ai_discovered'), ('Saved explicit AI review', 'relevant')):
+            with self.subTest(reason=reason), patch('github_radar.search_storage.SearchStore.keyword_verdicts', return_value={4: RelevanceVerdict(4, 'relevant', reason)}):
+                self.assertEqual(json.loads(self.get('/api/issue')[2])['keyword_groups'][0]['cards'][0]['ai_status'], expected)
+
     def test_issue_reads_ai_cache_only(self):
         self.save_issue()
 
