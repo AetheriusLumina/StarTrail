@@ -5,9 +5,11 @@ import json
 import threading
 from datetime import datetime
 from dataclasses import replace
+from urllib.parse import quote
 
 from .ai_types import AIProgress, AIRepositoryInput, CandidateBatch
 from .github_client import GitHubClient, GitHubRequestError
+from .readme_service import ReadmeService
 from .storage import RadarStore
 from .ranking import keyword_excluded_ids
 
@@ -17,12 +19,14 @@ class AIService:
         self.client = client
         self.store = store
         self.provider = provider
+        self._readme_service = ReadmeService(client, store)
         self._cancelled = threading.Event()
         self._commit_lock = threading.Lock()
 
     def cancel(self) -> None:
         with self._commit_lock:
             self._cancelled.set()
+        self._readme_service.cancel()
         self.provider.cancel()
 
     def _ensure_active(self) -> None:
@@ -134,21 +138,28 @@ class AIService:
         keyword_id=item.keyword_id if item else None
         if keyword_id is not None and keyword is None:
             raise ValueError("关键词不存在或已停用")
-        document = self.store.load_readme(repo_id)
-        if document is not None:
-            excerpt = document.text[:6000]
-        else:
-            try:
-                excerpt = self.client.readme_excerpt(repository.full_name, max_chars=6000)
-            except GitHubRequestError:
-                excerpt = None
+        # Manual understanding requires author content, not a metadata-only guess.
+        # Reuse the same stable-ID reader/cache as the README view; never silently
+        # swallow rate limits or submit a 6,000-character prefix as the whole file.
+        view = self._readme_service.load(repo_id)
         self._ensure_active()
-        source = AIRepositoryInput(repository, excerpt, True)
+        document = view.document
+        if document is None or not document.text.strip():
+            raise GitHubRequestError(view.reason or 'README 正文不可用，未调用 AI，原有解释已保留。')
+        if document.truncated or len(document.text.encode('utf-8')) > 524288:
+            raise GitHubRequestError('README 超过完整读取大小限制，未调用 AI，原有解释已保留。')
+        repository = replace(repository, full_name=document.full_name,
+                             html_url='https://github.com/' + '/'.join(
+                                 quote(part, safe='') for part in document.full_name.split('/')))
+        excerpt = document.text
+        source = AIRepositoryInput(repository, excerpt, False,
+                                   readme_source_url=document.source_url)
         version = hashlib.sha256(json.dumps({
             "repo_id": repo_id, "keyword": keyword,
             "description": repository.description, "topics": repository.topics,
             "language": repository.language, "readme_excerpt": excerpt,
-            "schema_version":3,"readme_hash":document.content_hash if document else None,
+            "schema_version":3,"input_version":4,"full_name":repository.full_name,
+            "readme_source_url":document.source_url,"readme_hash":document.content_hash,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         cached = self.store.load_explanation(repo_id, keyword_id, model_id, version)
         if cached is not None and not force:

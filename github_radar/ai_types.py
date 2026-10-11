@@ -12,6 +12,7 @@ class AIRepositoryInput:
     source_limited: bool
     candidate_rank: int | None = None
     observed_at: str | None = None
+    readme_source_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -80,6 +80,19 @@ class CodexProviderTests(unittest.TestCase):
         result,_=self.run_with_response(json.dumps(payload),lambda p:p.explain(entry(11),'local ai',None))
         self.assertEqual(result.evidence,tuple(payload['evidence'][:5]))
 
+    def test_explanation_sends_full_readme_and_canonical_repository_links(self):
+        from dataclasses import replace
+        text = '# Skill\n' + 'How to use. ' * 1000 + '\nTAIL EVIDENCE'
+        item = replace(entry(11, text), readme_source_url='https://github.com/owner/project-11/blob/main/README.md')
+        result, process = self.run_with_response(explanation(), lambda p: p.explain(item, 'local ai', None))
+        payload = json.loads(process.input.split('DATA_JSON:\n', 1)[1])['repository']
+        self.assertEqual(payload['repository_url'], 'https://github.com/owner/project-11')
+        self.assertEqual(payload['readme_source_url'], item.readme_source_url)
+        self.assertEqual(payload['readme_text'], text)
+        self.assertFalse(payload['source_limited'])
+        self.assertFalse(result.source_limited)
+        self.assertIn('web_search="disabled"', process.command)
+
     def test_explanation_schema_enforces_evidence_and_highlight_limits(self):
         from github_radar.ai_provider import _EXPLANATION_SCHEMA
         self.assertEqual(_EXPLANATION_SCHEMA['properties']['evidence'].get('maxItems'),5)

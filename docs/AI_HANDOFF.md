@@ -5,6 +5,10 @@
 
 当前preview.15已发布，发行源码0cdd1e0、Windows installer 38044350158及两份Windows checks成功；给维护者为已验收同源本地包。公开云包匿名检测通过，但本机完整下载遇慢网络超时，未验证云包全量下载，不能混用摘要；详见CHANGELOG。正式软件未替用户安装。此前preview.12云包完整下载记录是历史证据。来源优先和同日历史修复见下节。此前preview.11实际额度修复继续保留：默认core_reserve=0。RequestBudget按资源记录服务器reset窗口，忽略旧窗口迟到响应；本地估算归零时通过GitHubClient.reconcile_quota读取不消耗主额度的/rate_limit，确认实际余额，有额度继续，确认0或明确限流才整轮收尾。不能把未知额度、缓存命中、网络或保存失败归类额度成功。原始服务器额度及限流事件写入search_refresh_timing，不暴露凭证。真实客户端只在实际网络请求边界扣费，模拟客户端自行模拟该边界。publish_all允许有效任务跨一个本地零点保存到启动日期，仍检查UTC统计日、代次、配置、观测日期及取消。跨日404按本轮日期标记，不阻塞其他仓库。失败摘要跳过来源数量和兄弟榜单中止，优先报告根因。正式数据只读，不自动执行安装器。
 
+## 手动项目理解的正文契约
+
+本轮未发布修复：AIService.explain_project复用ReadmeService的稳定ID读取及磁盘缓存，完整正文不再裁为6000字符。显式理解输入包含canonical repository_url、readme_source_url、readme_text，完整读取上限512 KiB，README为不可信数据、Codex联网和本地工具权限保持关闭。无正文、读取失败、空白或截断正文禁止调用AI并保留旧解释；已有完整缓存可在限流时继续使用。input_version=4使旧的元数据/短摘录解释不作为新协议缓存命中，旧理解仍可阅读，由用户手动重新生成。schema仍为3、数据库仍为8；候选批次小摘录协议及两榜、排重、翻译、分类、每日任务和升级算法保持。实际验证及发布状态见CHANGELOG。
+
 ## 预翻译关闭竞争接续
 
 preview.15已发布：dd79802提交的Windows checks 38041451228因预翻译线程已发布但尚未start时close直接join而失败；不是Git上传失败。关闭流程现经队列锁同步启动，锁外join，受控延迟启动回归先红后绿。榜单与数据规则保持；发布与新包证据见CHANGELOG。

@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 from .ai_types import AIRepositoryInput, InsightText, ProjectExplanation, ProjectKind, RelevanceVerdict
 from .codex_connection import CodexConnection
@@ -165,8 +166,21 @@ class CodexProvider:
         if keyword is not None and len(keyword) > 120:
             raise AIOutputError("关键词过长")
         source = self._repository_data(item)
+        # Batch relevance retains its small excerpts. Only explicit project
+        # understanding receives the complete, bounded author document.
+        source.pop('readme_excerpt')
+        source.update(repository_url='https://github.com/' + '/'.join(
+                          quote(part, safe='') for part in item.repo.full_name.split('/')),
+                      readme_source_url=item.readme_source_url,
+                      readme_text=item.readme_excerpt,
+                      source_limited=item.source_limited or not item.readme_excerpt)
+        if item.readme_excerpt is not None and len(item.readme_excerpt.encode('utf-8')) > 524288:
+            raise AIOutputError('README 超过完整读取大小限制，未调用 AI，原有解释已保留。')
         result = self._run(
             "Explain this project in Chinese and English for non-technical ordinary users. "
+            "Read the entire supplied readme_text, including its installation and usage sections. "
+            "repository_url and readme_source_url identify the public repository and author document; "
+            "they are attribution, not evidence that you visited links or read other files. "
             "Use plain everyday language; explain any necessary technical term briefly in the same sentence. "
             "Apply this to every field, especially prerequisites: briefly explain named operating systems, "
             "abbreviations and tools by their role, rather than listing unfamiliar names alone. "

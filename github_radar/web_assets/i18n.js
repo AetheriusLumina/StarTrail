@@ -153,6 +153,8 @@ const RADAR_EN = Object.freeze({
   "显示上次保存的 README。": "Showing the last saved README.",
   "该项目没有可用的 README。": "This project has no available README.",
   "README 读取未完成。": "README could not be loaded.",
+  "README 正文不可用，未调用 AI，原有解释已保留。": "README content is unavailable. AI was not called; the saved explanation was kept.",
+  "README 超过完整读取大小限制，未调用 AI，原有解释已保留。": "README exceeds the full-document size limit. AI was not called; the saved explanation was kept.",
   "README 未说明": "Not specified in README",
   "来源章节": "Source section",
   "图片链接": "Image link",

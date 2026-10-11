@@ -7,3 +7,7 @@ assert(!/[\u4e00-\u9fff]/.test(translated),translated);
 assert(translated.includes('2026-10-07T22:15:21+08:00'));
 assert.equal(vm.runInContext('localizeServerText("作者原文")',context),'作者原文');
 console.log('Status translation checks passed');
+
+for (const message of ['README 正文不可用，未调用 AI，原有解释已保留。','README 超过完整读取大小限制，未调用 AI，原有解释已保留。']) {
+  assert(!/[\u4e00-\u9fff]/.test(vm.runInContext('localizeServerText('+JSON.stringify(message)+')',context)));
+}

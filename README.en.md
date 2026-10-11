@@ -109,6 +109,8 @@ Foreground growth discovery reads recent repositories and public trend feeds whi
 
 </details>
 
+For manual project understanding, I send the repository URL, the original README URL, and its complete text (up to 512 KiB), reusing a saved local copy first. Missing, failed, or truncated README content stops generation without calling AI or replacing the saved explanation. Refresh the README and regenerate after recovery. A source URL does not mean AI has browsed every file in the repository.
+
 ### 3. Revisit history: dates and combined search
 
 The calendar shows saved project counts. Open a date to read its snapshot, or combine name, saved content, date range, and source filters.
