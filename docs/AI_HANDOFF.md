@@ -3,11 +3,11 @@
 此文档以当前源码为准；工程变化集中在 [开发日志](CHANGELOG.md)，环境和打包见 [开发指南](DEVELOPMENT.md)，用户操作见 [用户手册](USER_GUIDE.md)。接续时先读根目录 AGENTS.md，再核对 Git 状态和实际代码。
 
 
-当前preview.16已发布，发行源码76a87c7、Windows installer 38110384366及两份Windows checks成功；给维护者为已冻结验收同源本地包。公开云包匿名更新检测通过，本轮未做云包全量下载，不能混用摘要；详见CHANGELOG。正式软件未替用户安装。此前preview.12云包完整下载记录是历史证据。来源优先和同日历史修复见下节。此前preview.11实际额度修复继续保留：默认core_reserve=0。RequestBudget按资源记录服务器reset窗口，忽略旧窗口迟到响应；本地估算归零时通过GitHubClient.reconcile_quota读取不消耗主额度的/rate_limit，确认实际余额，有额度继续，确认0或明确限流才整轮收尾。不能把未知额度、缓存命中、网络或保存失败归类额度成功。原始服务器额度及限流事件写入search_refresh_timing，不暴露凭证。真实客户端只在实际网络请求边界扣费，模拟客户端自行模拟该边界。publish_all允许有效任务跨一个本地零点保存到启动日期，仍检查UTC统计日、代次、配置、观测日期及取消。跨日404按本轮日期标记，不阻塞其他仓库。失败摘要跳过来源数量和兄弟榜单中止，优先报告根因。正式数据只读，不自动执行安装器。
+当前preview.17已发布，发行源码9689adf、Windows installer 38439078681及两份Windows checks成功；给维护者为已冻结验收同源本地包。公开云包匿名更新检测通过，本轮未做云包全量下载，不能混用摘要；详见CHANGELOG。正式软件未替用户安装。此前preview.12云包完整下载记录是历史证据。来源优先和同日历史修复见下节。此前preview.11实际额度修复继续保留：默认core_reserve=0。RequestBudget按资源记录服务器reset窗口，忽略旧窗口迟到响应；本地估算归零时通过GitHubClient.reconcile_quota读取不消耗主额度的/rate_limit，确认实际余额，有额度继续，确认0或明确限流才整轮收尾。不能把未知额度、缓存命中、网络或保存失败归类额度成功。原始服务器额度及限流事件写入search_refresh_timing，不暴露凭证。真实客户端只在实际网络请求边界扣费，模拟客户端自行模拟该边界。publish_all允许有效任务跨一个本地零点保存到启动日期，仍检查UTC统计日、代次、配置、观测日期及取消。跨日404按本轮日期标记，不阻塞其他仓库。失败摘要跳过来源数量和兄弟榜单中止，优先报告根因。正式数据只读，不自动执行安装器。
 
 ## 手动项目理解的正文契约
 
-本轮preview.17待发布：手动项目理解使用input_version=5，正常正文最多48 KiB内联（文件磁盘读取仍512 KiB），超量/缺失/截断/读取失败走仅URL的Codex联网网页路径；确认的AIContextLimitError最多额外降级一次，普通故障不重试。CodexRunner optionalrequired_web_url只用于解释，要求web事件结果中目标仓库URL、turnNviewN及正数Total lines；兼容当前action.other与旧open_page，不能把仅搜索、打开失败或只有action.url当成读取证明。页面无有效evidence保留旧解释。候选路径默认参数及两榜不变。ReadmeService independent=True用于AI和详情阅读，网络副本budget=None，保存自身真实quota/secondary cooldown并按reset恢复，不覆盖榜单客户端状态；服务日志记录无凭证的repo_id及官方观测，原始正式日更记录仅证明晨间403/core0，不能反推旧晚间点击原因。schema=3、数据库=8及其余业务规则保持。
+preview.17已发布：手动项目理解使用input_version=5，正常正文最多48 KiB内联（文件磁盘读取仍512 KiB），超量/缺失/截断/读取失败走仅URL的Codex联网网页路径；确认的AIContextLimitError最多额外降级一次，普通故障不重试。CodexRunner optionalrequired_web_url只用于解释，要求web事件结果中目标仓库URL、turnNviewN及正数Total lines；兼容当前action.other与旧open_page，不能把仅搜索、打开失败或只有action.url当成读取证明。页面无有效evidence保留旧解释。候选路径默认参数及两榜不变。ReadmeService independent=True用于AI和详情阅读，网络副本budget=None，保存自身真实quota/secondary cooldown并按reset恢复，不覆盖榜单客户端状态；服务日志记录无凭证的repo_id及官方观测，原始正式日更记录仅证明晨间403/core0，不能反推旧晚间点击原因。schema=3、数据库=8及其余业务规则保持。
 
 ## 预翻译关闭竞争接续
 
