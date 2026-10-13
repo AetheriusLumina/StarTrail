@@ -5,6 +5,7 @@ import copy
 import queue
 import threading
 import time
+import logging
 from datetime import datetime, timezone
 from dataclasses import replace
 from urllib.parse import quote
@@ -14,8 +15,11 @@ from .github_client import GitHubClient, GitHubRequestError, GitHubRateLimitErro
 
 
 class ReadmeService:
-    def __init__(self, client, store):
+    def __init__(self, client, store, *, independent=False):
         self.client, self.store = client, store
+        self._server_quota = {}
+        self._server_retry_until = 0
+        self.independent = independent
         self.timeout = 20
         self._cancelled = threading.Event()
         self._commit_lock = threading.Lock()
@@ -39,7 +43,10 @@ class ReadmeService:
         # An abandoned transport cannot mutate the daily worker's quota/budget state.
         client = copy.copy(self.client) if isinstance(self.client, GitHubClient) else self.client
         if isinstance(client, GitHubClient):
-            client.budget = copy.deepcopy(client.budget)
+            client.budget = None if self.independent else copy.deepcopy(client.budget)
+            if self.independent:
+                client.rate_limit_observations = copy.deepcopy(client.rate_limit_observations)
+                client.renew_expired_quotas()
         results = queue.Queue(maxsize=1)
         def network():
             try:
@@ -67,10 +74,15 @@ class ReadmeService:
                 continue
         with self._commit_lock:
             self._check(deadline)
-            if isinstance(client, GitHubClient):
+            if isinstance(client, GitHubClient) and not self.independent:
                 for name in ('remaining', 'core_remaining', 'search_remaining', 'reset_at',
                              'core_reset_at', 'search_reset_at', '_last_headers'):
                     setattr(self.client, name, getattr(client, name))
+        if self.independent and isinstance(client, GitHubClient):
+            self._server_quota = copy.deepcopy(client.rate_limit_observations.get('core', {}))
+            self._server_retry_until = max(self._server_retry_until, client.retry_not_before)
+            logging.getLogger(__name__).info('readme_request repo_id=%s status=%s quota=%s',
+                repo.id, 'error' if error else 'ok', client.rate_limit_observations.get('core', {}))
         if error: raise error
         return current, result
 
@@ -84,6 +96,16 @@ class ReadmeService:
     def _quota(self):
         # Some offline test clients intentionally expose no network methods.
         if isinstance(self.client, GitHubClient):
+            if self.independent:
+                evidence = max((self._server_quota, self.client.rate_limit_observations.get('core', {})),
+                               key=lambda row: (row.get('observed_at', 0), bool(row)))
+                if self._server_retry_until > time.time():
+                    raise GitHubRateLimitError(self._server_retry_until)
+                reset = evidence.get('reset_at')
+                if evidence.get('remaining') == 0 and reset and reset > time.time():
+                    logging.getLogger(__name__).info('readme_request blocked_by_server_quota=%s', evidence)
+                    raise GitHubRateLimitError(reset)
+                return
             self.client.renew_expired_quotas()
             if self.client.core_remaining == 0:
                 raise GitHubRateLimitError(self.client.core_reset_at)

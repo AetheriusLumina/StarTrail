@@ -145,20 +145,18 @@ class AIServicePersistenceTests(unittest.TestCase):
         result = AIService(client, self.store, Provider()).explain_project(2, None, self.at)
         self.assertEqual(result.readme_hash, doc.content_hash)
 
-    def test_manual_analysis_readme_failure_never_calls_ai_or_replaces_old_explanation(self):
+    def test_manual_analysis_readme_failure_passes_url_only_to_provider(self):
         from unittest.mock import Mock
         client = FakeClient([])
         client.readme_failure = True
-        old_text = InsightText('Saved summary', 'Saved purpose', 'Scenario', 'Users', ())
-        old = ProjectExplanation(old_text, old_text, 'relevant', (), True)
-        self.store.save_explanation(2, self.rule.id, None, 'old-input-version', old)
         provider = Mock()
         content = InsightText('Summary', 'Purpose', 'Scenario', 'Users', ())
-        provider.explain.return_value = ProjectExplanation(content, content, 'relevant', (), False)
-        with self.assertRaisesRegex(GitHubRequestError, 'README'):
-            AIService(client, self.store, provider).explain_project(2, None, self.at, force=True)
-        provider.explain.assert_not_called()
-        self.assertEqual(self.store.latest_explanation_any_model(2, self.rule.id)[0], old)
+        provider.explain.return_value = ProjectExplanation(content, content, 'relevant', (), True)
+        AIService(client, self.store, provider).explain_project(2, None, self.at, force=True)
+        source = provider.explain.call_args.args[0]
+        self.assertIsNone(source.readme_excerpt)
+        self.assertTrue(source.source_limited)
+        self.assertEqual(source.repo.full_name, 'owner/repo-2')
 
     def test_manual_analysis_fetches_full_readme_once_and_reuses_it_after_quota_failure(self):
         from github_radar.readme_types import ReadmeFetch
@@ -200,12 +198,12 @@ class AIServicePersistenceTests(unittest.TestCase):
         provider = Mock()
         provider.explain.return_value = ProjectExplanation(content, content, 'relevant', (), False)
         service = AIService(client, self.store, provider)
-        with self.assertRaisesRegex(GitHubRequestError, '限流'):
-            service.explain_project(2, None, self.at)
-        provider.explain.assert_not_called()
+        client.rate_limit_observations['core'] = {'remaining':0,'reset_at':client.core_reset_at}
+        service.explain_project(2, None, self.at)
+        self.assertIsNone(provider.explain.call_args.args[0].readme_excerpt)
         self.store.save_readme(document('# Complete author README', 2))
         service.explain_project(2, None, self.at)
-        provider.explain.assert_called_once()
+        self.assertEqual(provider.explain.call_count, 2)
         opener.assert_not_called()
 
     def test_manual_analysis_renamed_repository_uses_verified_document_identity(self):
@@ -227,32 +225,18 @@ class AIServicePersistenceTests(unittest.TestCase):
         AIService(Client([]), self.store, Provider()).explain_project(2, None, self.at)
         self.assertEqual(self.store.repositories_for_ids([2])[2].full_name, 'owner/repo-2')
 
-    def test_manual_analysis_missing_or_empty_readme_does_not_generate(self):
+    def test_manual_analysis_missing_empty_and_truncated_content_uses_url_only(self):
         from unittest.mock import Mock
-        from github_radar.readme_types import ReadmeFetch
-        class Client(FakeClient):
-            def fetch_readme_by_id(inner, repo_id, etag=None):
-                return ReadmeFetch(inner.text, None, False, False)
-        for text in (None, '   '):
-            with self.subTest(text=text):
-                client = Client([])
-                client.text = text
-                provider = Mock()
-                with self.assertRaisesRegex(GitHubRequestError, 'README'):
-                    AIService(client, self.store, provider).explain_project(2, None, self.at)
-                provider.explain.assert_not_called()
-
-    def test_manual_analysis_rejects_truncated_readme_before_ai(self):
         from dataclasses import replace
-        from unittest.mock import Mock
         from tests.test_readme_content import document
-        self.store.save_readme(replace(document('# Project incomplete', 2), truncated=True))
-        provider = Mock()
-        content = InsightText('Summary', 'Purpose', 'Scenario', 'Users', ())
-        provider.explain.return_value = ProjectExplanation(content, content, 'relevant', (), False)
-        with self.assertRaisesRegex(GitHubRequestError, 'README'):
-            AIService(FakeClient([]), self.store, provider).explain_project(2, None, self.at)
-        provider.explain.assert_not_called()
+        for text, truncated in [('   ', False), ('Partial README', True)]:
+            with self.subTest(text=text):
+                self.store.save_readme(replace(document(text, 2), truncated=truncated))
+                provider = Mock()
+                content = InsightText('Summary', 'Purpose', 'Scenario', 'Users', ())
+                provider.explain.return_value = ProjectExplanation(content, content, 'relevant', (), True)
+                AIService(FakeClient([]), self.store, provider).explain_project(2, None, self.at, force=True)
+                self.assertIsNone(provider.explain.call_args.args[0].readme_excerpt)
 
     def test_analysis_cache_tracks_full_readme_hash_including_changed_tail(self):
         from tests.test_readme_content import document

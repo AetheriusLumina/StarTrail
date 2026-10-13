@@ -109,7 +109,7 @@ Foreground growth discovery reads recent repositories and public trend feeds whi
 
 </details>
 
-For manual project understanding, I send the repository URL, the original README URL, and its complete text (up to 512 KiB), reusing a saved local copy first. Missing, failed, or truncated README content stops generation without calling AI or replacing the saved explanation. Refresh the README and regenerate after recovery. A source URL does not mean AI has browsed every file in the repository.
+For manual project understanding, I reuse the local README first. Up to 48 KiB, I send its complete text together with the repository and source URLs. Larger, missing, unreadable, or model-context-limited content uses a repository-page fallback: Codex must actually read the public page before explaining it. Only a confirmed model context error permits one additional URL-only attempt; other failures do not trigger repeated AI calls. A failed page read keeps the saved explanation. Reading the README has its own request budget and still honors actual GitHub cooldowns; Codex page reading uses your account allowance. A URL or search snippet alone does not establish that the page was read.
 
 ### 3. Revisit history: dates and combined search
 

@@ -19,7 +19,7 @@ class AIService:
         self.client = client
         self.store = store
         self.provider = provider
-        self._readme_service = ReadmeService(client, store)
+        self._readme_service = ReadmeService(client, store, independent=True)
         self._cancelled = threading.Event()
         self._commit_lock = threading.Lock()
 
@@ -144,22 +144,19 @@ class AIService:
         view = self._readme_service.load(repo_id)
         self._ensure_active()
         document = view.document
-        if document is None or not document.text.strip():
-            raise GitHubRequestError(view.reason or 'README 正文不可用，未调用 AI，原有解释已保留。')
-        if document.truncated or len(document.text.encode('utf-8')) > 524288:
-            raise GitHubRequestError('README 超过完整读取大小限制，未调用 AI，原有解释已保留。')
-        repository = replace(repository, full_name=document.full_name,
-                             html_url='https://github.com/' + '/'.join(
-                                 quote(part, safe='') for part in document.full_name.split('/')))
-        excerpt = document.text
-        source = AIRepositoryInput(repository, excerpt, False,
-                                   readme_source_url=document.source_url)
+        if document is not None:
+            repository = replace(repository, full_name=document.full_name,
+                                 html_url='https://github.com/' + '/'.join(
+                                     quote(part, safe='') for part in document.full_name.split('/')))
+        excerpt = document.text if document and not document.truncated and document.text.strip() else None
+        source = AIRepositoryInput(repository, excerpt, excerpt is None,
+                                   readme_source_url=document.source_url if document else None)
         version = hashlib.sha256(json.dumps({
             "repo_id": repo_id, "keyword": keyword,
             "description": repository.description, "topics": repository.topics,
             "language": repository.language, "readme_excerpt": excerpt,
-            "schema_version":3,"input_version":4,"full_name":repository.full_name,
-            "readme_source_url":document.source_url,"readme_hash":document.content_hash,
+            "schema_version":3,"input_version":5,"full_name":repository.full_name,
+            "readme_source_url":document.source_url if document else None,"readme_hash":document.content_hash if document else None,
         }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         cached = self.store.load_explanation(repo_id, keyword_id, model_id, version)
         if cached is not None and not force:

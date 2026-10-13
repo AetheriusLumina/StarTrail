@@ -11,7 +11,7 @@ from github_radar.codex_connection import ConnectionState, ModelOption
 from github_radar.models import Repository
 
 
-def entry(repo_id: int, readme: str | None = None) -> AIRepositoryInput:
+def entry(repo_id: int, readme: str | None = "Author README evidence") -> AIRepositoryInput:
     repo = Repository(repo_id, f"owner/project-{repo_id}",
                       f"https://github.com/owner/project-{repo_id}",
                       "A local AI project", ("ai",), "Python", 100 + repo_id, False)
@@ -92,6 +92,82 @@ class CodexProviderTests(unittest.TestCase):
         self.assertFalse(payload['source_limited'])
         self.assertFalse(result.source_limited)
         self.assertIn('web_search="disabled"', process.command)
+
+    def test_context_failure_retries_once_with_url_and_other_failures_do_not_retry(self):
+        from unittest.mock import Mock
+        from github_radar.ai_provider import AIContextLimitError
+        p = CodexProvider(ReadyConnection())
+        p._run = Mock(side_effect=AIContextLimitError('context'))
+        p._runner.run = Mock(return_value=json.loads(explanation()))
+        p.explain(entry(11, 'Small README'), 'local ai', None)
+        self.assertEqual(p._run.call_count, 1)
+        self.assertEqual(p._runner.run.call_count, 1)
+        self.assertIsNone(p._runner.run.call_args.args[1]['repository']['readme_text'])
+        p._run = Mock(side_effect=AIOutputError('network error'))
+        p._runner.run.reset_mock()
+        with self.assertRaises(AIOutputError):
+            p.explain(entry(11, 'Small README'), 'local ai', None)
+        p._runner.run.assert_not_called()
+
+    def test_web_understanding_requires_an_open_of_this_repository(self):
+        for action, succeeds in [({'type':'search','query':'repo'}, False),
+                                 ({'type':'open_page','url':'https://github.com/other/repo'}, False),
+                                 ({'type':'open_page','url':'https://github.com/owner/project-11'}, True)]:
+            def launch(command, **kwargs):
+                class Process(FakeExec):
+                    def communicate(inner, input=None, timeout=None):
+                        kwargs['stdout'].write(json.dumps({'type':'item.completed','item':{'id':'web1','type':'web_search','action':action,'results':[{'url':action.get('url'),'ref_id':'turn1view0','snippet':'Total lines: 476'}]}})+'\n')
+                        kwargs['stdout'].flush()
+                        return super().communicate(input, timeout)
+                return Process(command, explanation())
+            with self.subTest(action=action), patch('github_radar.codex_runner.subprocess.Popen', side_effect=launch):
+                p = CodexProvider(ReadyConnection())
+                if succeeds:
+                    self.assertEqual(p.explain(entry(11, None), 'local ai', None).en.summary, 'One sentence')
+                else:
+                    with self.assertRaisesRegex(AIOutputError, '打开仓库网页'):
+                        p.explain(entry(11, None), 'local ai', None)
+
+    def test_failed_open_page_cannot_be_saved_as_read_content(self):
+        def launch(command, **kwargs):
+            class Process(FakeExec):
+                def communicate(inner,input=None,timeout=None):
+                    event={'type':'item.completed','item':{'id':'web1','type':'web_search','action':{'type':'open_page','url':'https://github.com/owner/project-11'},'results':[{'snippet':'Failed to fetch: 404 Not Found'}]}}
+                    kwargs['stdout'].write(json.dumps(event)+'\n');kwargs['stdout'].flush()
+                    return super().communicate(input,timeout)
+            return Process(command,explanation())
+        with patch('github_radar.codex_runner.subprocess.Popen',side_effect=launch):
+            with self.assertRaisesRegex(AIOutputError,'打开仓库网页'):
+                CodexProvider(ReadyConnection()).explain(entry(11,None),'local ai',None)
+
+    def test_current_codex_other_action_requires_view_evidence_not_search_snippet(self):
+        for ref, snippet, succeeds in [('turn1view0','Total lines: 476',True),
+                                      ('turn1search0','Total lines: 476',False),
+                                      ('turn1view0','README mentions skills',False)]:
+            def launch(command, **kwargs):
+                class Process(FakeExec):
+                    def communicate(inner, input=None, timeout=None):
+                        event={'type':'item.completed','item':{'id':'web1','type':'web_search','action':{'type':'other'},'results':[
+                            {'ref_id':ref,'snippet':snippet,'url':'https://github.com/owner/project-11'}]}}
+                        kwargs['stdout'].write(json.dumps(event)+'\n');kwargs['stdout'].flush()
+                        return super().communicate(input, timeout)
+                return Process(command, explanation())
+            with self.subTest(ref=ref, snippet=snippet), patch('github_radar.codex_runner.subprocess.Popen',side_effect=launch):
+                if succeeds:
+                    CodexProvider(ReadyConnection()).explain(entry(11,None),'local ai',None)
+                else:
+                    with self.assertRaisesRegex(AIOutputError,'打开仓库网页'):
+                        CodexProvider(ReadyConnection()).explain(entry(11,None),'local ai',None)
+
+    def test_large_readme_uses_verified_web_read_instead_of_inline_body(self):
+        from unittest.mock import Mock
+        p = CodexProvider(ReadyConnection())
+        p._runner.run = Mock(return_value=json.loads(explanation()))
+        p.explain(entry(11, 'a' * 70000), 'local ai', None)
+        args, kwargs = p._runner.run.call_args
+        self.assertIsNone(args[1]['repository']['readme_text'])
+        self.assertTrue(kwargs['web_search'])
+        self.assertEqual(kwargs['required_web_url'], 'https://github.com/owner/project-11')
 
     def test_explanation_schema_enforces_evidence_and_highlight_limits(self):
         from github_radar.ai_provider import _EXPLANATION_SCHEMA

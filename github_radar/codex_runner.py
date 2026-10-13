@@ -1,9 +1,11 @@
 """A bounded, read-only Codex invocation with verifiable live-search events."""
 import json
+import re
 import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 class CodexRunner:
     def __init__(self,connection):
@@ -15,8 +17,8 @@ class CodexRunner:
             self._cancelled.set()
             if self._process is not None and self._process.poll() is None:self._process.kill()
 
-    def run(self,instruction,data,schema,model_id,*,web_search=False,timeout=120,cancel_event=None,on_web_search=None,data_file=None):
-        from .ai_provider import AIOutputError
+    def run(self,instruction,data,schema,model_id,*,web_search=False,timeout=120,cancel_event=None,on_web_search=None,data_file=None,required_web_url=None):
+        from .ai_provider import AIOutputError, AIContextLimitError
         def cancelled():return self._cancelled.is_set() or bool(cancel_event and cancel_event.is_set())
         if cancelled():raise AIOutputError('AI 分析已取消')
         if not 0<timeout<=(600 if data_file is not None else 120):raise AIOutputError('AI 调用时间预算无效')
@@ -24,6 +26,10 @@ class CodexRunner:
         if not state.ready:raise AIOutputError(state.reason)
         if model_id is not None and model_id not in {m.id for m in self.connection.list_models()}:
             raise AIOutputError('所选 Codex 模型目前不可用，请重新选择')
+        if required_web_url is not None:
+            parsed = urlsplit(required_web_url)
+            if not web_search or parsed.scheme != 'https' or parsed.netloc != 'github.com' or len(parsed.path.strip('/').split('/')) != 2 or parsed.query or parsed.fragment:
+                raise AIOutputError('仓库网页地址无效')
         self.web_search_calls=0
         with tempfile.TemporaryDirectory(prefix='startrail-ai-') as temporary:
             root=Path(temporary);answer=root/'answer.json';schema_file=root/'schema.json';trace=root/'events.jsonl';errors=root/'errors.txt'
@@ -71,7 +77,7 @@ class CodexRunner:
                     if process.returncode!=0:
                         text=errors.read_text(encoding='utf-8',errors='replace')[:1048576].lower()
                         if any(term in text for term in ('context_length_exceeded','maximum context length','context window')):
-                            raise AIOutputError('整组候选超出当前模型上下文限制；资料保留，请选择更大上下文模型或缩小关键词范围后继续')
+                            raise AIContextLimitError('整组候选超出当前模型上下文限制；资料保留，请选择更大上下文模型或缩小关键词范围后继续')
                         raise AIOutputError('Codex 分析失败，请检查登录、额度或网络后重试')
                 except subprocess.TimeoutExpired as exc:
                     process.kill();process.wait(timeout=2)
@@ -82,7 +88,7 @@ class CodexRunner:
                         if self._process is process:self._process=None
             if web_search:
                 if trace.stat().st_size>8*1024*1024:raise AIOutputError('搜索事件超过读取限制')
-                seen=set()
+                seen=set(); page_opened=False
                 with trace.open(encoding='utf-8') as stream:
                     while line:=stream.readline(65537):
                         if len(line)>65536:raise AIOutputError('搜索事件超过单行限制')
@@ -96,9 +102,29 @@ class CodexRunner:
                             if not isinstance(identity,str) or identity in seen:continue
                             seen.add(identity);self.web_search_calls+=1
                             if on_web_search:on_web_search(str(item.get('query',''))[:300])
+                            action=item.get('action',{})
+                            targets=[]
+                            if isinstance(action,dict):
+                                if action.get('type') in ('open_page','open','other'):
+                                    # Current Codex emits opened pages as 'other' with
+                                    # view refs and line counts, rather than open_page.
+                                    results=item.get('results',[])
+                                    if isinstance(results,list):
+                                        for row in results:
+                                            if (isinstance(row,dict) and
+                                                re.fullmatch(r'turn\d+view\d+',str(row.get('ref_id',''))) and
+                                                re.fullmatch(r'Total lines: [1-9]\d*',str(row.get('snippet','')))):
+                                                targets.append(row.get('url'))
+                            for target in targets:
+                                if required_web_url and isinstance(target,str):
+                                    address=urlsplit(target)
+                                    prefix=urlsplit(required_web_url).path.rstrip('/').casefold()
+                                    page_opened = page_opened or (address.scheme=='https' and address.netloc=='github.com' and
+                                        (address.path.rstrip('/').casefold()==prefix or address.path.casefold().startswith(prefix+'/blob/')))
                         if item.get('type') in ('command_execution','file_change'):
                             raise AIOutputError('AI 搜索调用了不允许的本地工具')
                 if not self.web_search_calls:raise AIOutputError('未观察到实际联网搜索，本次未记为完成')
+                if required_web_url and not page_opened:raise AIOutputError('未观察到 AI 实际打开仓库网页，原解释已保留，请重试。')
             if not answer.is_file() or answer.stat().st_size>65536:raise AIOutputError('Codex 未返回可读取的分析结果')
             try:result=json.loads(answer.read_text(encoding='utf-8'))
             except (OSError,UnicodeError,ValueError):raise AIOutputError('Codex 返回的分析格式有误') from None

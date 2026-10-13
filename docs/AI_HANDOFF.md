@@ -7,7 +7,7 @@
 
 ## 手动项目理解的正文契约
 
-preview.16已发布：AIService.explain_project复用ReadmeService的稳定ID读取及磁盘缓存，完整正文不再裁为6000字符。显式理解输入包含canonical repository_url、readme_source_url、readme_text，完整读取上限512 KiB，README为不可信数据、Codex联网和本地工具权限保持关闭。无正文、读取失败、空白或截断正文禁止调用AI并保留旧解释；已有完整缓存可在限流时继续使用。input_version=4使旧的元数据/短摘录解释不作为新协议缓存命中，旧理解仍可阅读，由用户手动重新生成。schema仍为3、数据库仍为8；候选批次小摘录协议及两榜、排重、翻译、分类、每日任务和升级算法保持。实际验证及发布状态见CHANGELOG。
+本轮preview.17待发布：手动项目理解使用input_version=5，正常正文最多48 KiB内联（文件磁盘读取仍512 KiB），超量/缺失/截断/读取失败走仅URL的Codex联网网页路径；确认的AIContextLimitError最多额外降级一次，普通故障不重试。CodexRunner optionalrequired_web_url只用于解释，要求web事件结果中目标仓库URL、turnNviewN及正数Total lines；兼容当前action.other与旧open_page，不能把仅搜索、打开失败或只有action.url当成读取证明。页面无有效evidence保留旧解释。候选路径默认参数及两榜不变。ReadmeService independent=True用于AI和详情阅读，网络副本budget=None，保存自身真实quota/secondary cooldown并按reset恢复，不覆盖榜单客户端状态；服务日志记录无凭证的repo_id及官方观测，原始正式日更记录仅证明晨间403/core0，不能反推旧晚间点击原因。schema=3、数据库=8及其余业务规则保持。
 
 ## 预翻译关闭竞争接续
 

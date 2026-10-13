@@ -42,6 +42,53 @@ class ReadmeServiceTests(unittest.TestCase):
         self.store.commit_daily('2026-09-30', [self.client.repo], [], [])
         self.service = ReadmeService(self.client, self.store)
 
+    def test_independent_reader_remembers_actual_zero_until_reset(self):
+        calls=[]
+        payload={'id':42,'full_name':'owner/repo','html_url':'https://github.com/owner/repo','description':'','topics':[],'language':None,'stargazers_count':100,'archived':False}
+        def opener(request,timeout):
+            calls.append(request.full_url)
+            response=io.BytesIO(json.dumps(payload).encode())
+            response.headers={'X-RateLimit-Remaining':'0','X-RateLimit-Reset':str(int(time.time())+3600),'X-RateLimit-Resource':'core'}
+            return response
+        client=GitHubClient(opener=opener)
+        reader=ReadmeService(client,self.store,independent=True)
+        self.assertEqual(reader.load(42).status,'error')
+        self.assertEqual(len(calls),1)
+        self.assertEqual(reader.load(42).status,'error')
+        self.assertEqual(len(calls),1)
+        self.assertEqual(client.rate_limit_observations,{})
+        reader._server_quota['reset_at'] = int(time.time())-1
+        reader.load(42)
+        self.assertEqual(len(calls),2)
+
+    def test_independent_reader_does_not_inherit_exhausted_update_budget(self):
+        from types import SimpleNamespace
+        payload = {'id':42,'full_name':'owner/repo','html_url':'https://github.com/owner/repo',
+                   'description':'','topics':[],'language':None,'stargazers_count':100,'archived':False}
+        readme = {'encoding':'base64','path':'README.md','html_url':'https://github.com/owner/repo/blob/main/README.md',
+                  'content':base64.b64encode(b'# Author README').decode()}
+        calls = []
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            response = io.BytesIO(json.dumps(readme if request.full_url.endswith('/readme') else payload).encode())
+            response.headers = {'X-RateLimit-Remaining':'100','X-RateLimit-Reset':str(int(time.time())+3600),'X-RateLimit-Resource':'core'}
+            return response
+        client = GitHubClient(opener=opener)
+        budget = SimpleNamespace(core_remaining=0, deadline=0)
+        client.budget = budget
+        client.core_remaining = 0
+        client.core_reset_at = int(time.time())+3600
+        client.rate_limit_observations['core'] = {'remaining':100,'reset_at':client.core_reset_at}
+        # Legacy reading stops on the local zero, without sending anything.
+        self.assertEqual(ReadmeService(client, self.store).load(42).status, 'error')
+        self.assertEqual(calls, [])
+        view = ReadmeService(client, self.store, independent=True).load(42)
+        self.assertEqual(view.status, 'ready')
+        self.assertEqual(view.document.text, '# Author README')
+        self.assertIs(client.budget, budget)
+        self.assertEqual(budget.core_remaining, 0)
+        self.assertEqual(len(calls), 2)
+
     def test_total_deadline_rejects_late_network_result_without_cache_write(self):
         started, release, finished = threading.Event(), threading.Event(), threading.Event()
         original = self.client.fetch_readme

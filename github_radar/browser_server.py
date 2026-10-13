@@ -75,7 +75,7 @@ class BrowserServer:
         self._prepared_at=0.0
         self._prepare_cancel=threading.Event()
         self._ai_worker_thread: threading.Thread | None = None
-        self.readme_service = ReadmeService(service.client, store)
+        self.readme_service = ReadmeService(service.client, store, independent=True)
         self.translation_service = TranslationService(store)
         self.project_pretranslator = ProjectPretranslator(store, self.readme_service, self.translation_service)
         self._readme_worker: threading.Thread | None = None
