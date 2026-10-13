@@ -1,3 +1,6 @@
+> [!WARNING]
+> A Windows Defender behavior detection (`Behavior:Win32/Persistence.A!ml`) has been reported during preview.17 installation/run and is under investigation. Matching release hashes and clean static scans do not establish a false positive. Do not bypass the detection by disabling protection or adding exclusions. No cleared replacement installer is available yet.
+
 <p align="center"><img src="github_radar/web_assets/startrail.png" width="96" alt="StarTrail cat and starlight icon"></p>
 <h1 align="center">StarTrail</h1>
 <p align="center">Discover open-source projects, understand what they do, and keep the interesting ones locally.</p>

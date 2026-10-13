@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import base64
 import csv
+import ctypes
 import locale
 import re
 import subprocess
@@ -82,7 +83,27 @@ def build_task_xml(command: Path, arguments: tuple[str, ...], working_dir: Path,
     return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
+def _system_directory() -> Path:
+    # Ask Windows, not PATH, cwd or a caller-controlled environment variable.
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_directory = kernel.GetSystemDirectoryW
+    get_directory.argtypes = (ctypes.c_wchar_p, ctypes.c_uint)
+    get_directory.restype = ctypes.c_uint
+    buffer = ctypes.create_unicode_buffer(32768)
+    size = get_directory(buffer, len(buffer))
+    if not size or size >= len(buffer):
+        raise SchedulerError("无法定位 Windows 系统目录")
+    directory = Path(buffer.value)
+    if not directory.is_absolute():
+        raise SchedulerError("Windows 系统目录无效")
+    return directory
+
+
 def _run(args: list[str], runner: Callable = subprocess.run) -> subprocess.CompletedProcess:
+    tools = {"schtasks.exe": "schtasks.exe", "whoami.exe": "whoami.exe",
+             "powershell.exe": "WindowsPowerShell/v1.0/powershell.exe"}
+    if args and args[0].casefold() in tools:
+        args = [str(_system_directory() / tools[args[0].casefold()]), *args[1:]]
     try:
         result = runner(args, capture_output=True, text=False, check=False, timeout=15,
                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -152,9 +173,34 @@ def query_task(name: str, *, runner: Callable = subprocess.run) -> TaskState:
                      ET.tostring(root, encoding="unicode"))
 
 
+def _safe_task_shape(state: TaskState) -> bool:
+    if not state.xml:
+        return False
+    try:
+        root = ET.fromstring(state.xml)
+    except ET.ParseError:
+        return False
+    ns = {"t": _NS}
+    groups = {tag: root.findall(f"t:{tag}", ns)
+              for tag in ("Actions", "Triggers", "Principals")}
+    if any(len(items) != 1 for items in groups.values()):
+        return False
+    actions, triggers, principals = (groups[tag][0]
+                                    for tag in ("Actions", "Triggers", "Principals"))
+    if (len(actions) != 1 or actions[0].tag != f"{{{_NS}}}Exec"
+            or len(triggers) != 1 or triggers[0].tag != f"{{{_NS}}}CalendarTrigger"
+            or len(principals) != 1 or principals[0].tag != f"{{{_NS}}}Principal"):
+        return False
+    principal = principals[0]
+    return (principal.get("id") == "Author"
+            and actions.get("Context") == "Author"
+            and principal.findtext("t:RunLevel", namespaces=ns) in (None, "LeastPrivilege")
+            and principal.findtext("t:LogonType", namespaces=ns) == "InteractiveToken")
+
+
 def _belongs_to_us(state: TaskState, command: Path,
                    arguments: tuple[str, ...]) -> bool:
-    return (state.description == _DESCRIPTION
+    return (_safe_task_shape(state) and state.description == _DESCRIPTION
             and state.command is not None
             and str(Path(state.command).resolve()).casefold() ==
             str(Path(command).resolve()).casefold()
@@ -169,7 +215,7 @@ def _duration_seconds(value):
 
 def _same_schedule(state: TaskState, working_dir: Path,
                    time: str, user_sid: str) -> bool:
-    if not state.xml:
+    if not _safe_task_shape(state):
         return False
     root = ET.fromstring(state.xml)
     ns = {"t": _NS}
