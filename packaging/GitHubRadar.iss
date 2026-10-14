@@ -274,8 +274,11 @@ begin
       'InstallLocation', CandidateRoot);
   if CandidateRoot <> '' then begin
     CandidateRoot := RemoveBackslashUnlessRoot(ExpandFileName(CandidateRoot));
-    if FileExists(AddBackslash(CandidateRoot) + 'GitHubRadar.exe') and
-       HasRecordedUninstaller(CandidateRoot) then
+    { Recover a registered installation when protection removed its main EXE.
+      Retained data alone must not make an unrelated directory an install. }
+    if HasRecordedUninstaller(CandidateRoot) and
+       (FileExists(AddBackslash(CandidateRoot) + 'GitHubRadar.exe') or
+        FileExists(AddBackslash(CandidateRoot) + 'UserData\.github-radar-data')) then
       PreviousRoot := CandidateRoot;
   end;
   if PreviousRoot <> '' then begin

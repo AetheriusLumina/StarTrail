@@ -1,5 +1,5 @@
 > [!WARNING]
-> preview.17 的安装/运行出现 Windows Defender 行为告警 `Behavior:Win32/Persistence.A!ml`，正在调查。发布哈希一致与静态扫描未发现威胁不能证明误报；请勿关闭防护或添加排除绕过告警。目前没有已通过行为复核的替代安装包。
+> preview.17 的安装/运行出现 Windows Defender 行为告警 `Behavior:Win32/Persistence.A!ml`，正在调查。发布哈希一致与静态扫描未发现威胁不能证明误报；请勿关闭防护或添加排除绕过告警。preview.18加固包已做本机实际安装检查，微软复核结论仍待定；不据此保证未来永不告警。
 
 <p align="center"><img src="github_radar/web_assets/startrail.png" width="96" alt="StarTrail 猫形星光图标"></p>
 <h1 align="center">星迹 · StarTrail</h1>
