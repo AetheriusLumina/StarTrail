@@ -42,13 +42,13 @@ class SearchControlsTests(unittest.TestCase):
 class SearchEnabledJobsTests(unittest.TestCase):
     setUp=jobs_fixture.SearchJobsTests.setUp
     engine=jobs_fixture.SearchJobsTests.engine
-    def test_disabled_auto_uses_public_fallback_but_manual_continue_works(self):
+    def test_disabled_ai_uses_modern_public_search_but_manual_continue_works(self):
         self.store.save_search_enabled(False)
         jobs=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,self.engine,now=lambda:self.now)
-        self.assertIsNone(jobs.refresh(self.now.date().isoformat(),self.now.isoformat()))
-        self.assertEqual(self.calls,[])
+        self.assertEqual(jobs.refresh(self.now.date().isoformat(),self.now.isoformat()).status,'ok')
+        self.assertEqual(len(self.calls),3)
         jobs.continue_keyword(self.a.id,self.now.date().isoformat())
-        self.assertEqual(len(self.calls),1)
+        self.assertEqual(len(self.calls),4)
     def test_disable_during_module_does_not_start_next_paid_module(self):
         def factory():
             engine=self.engine(); original=engine.run
@@ -59,3 +59,15 @@ class SearchEnabledJobsTests(unittest.TestCase):
         result=jobs.refresh(self.now.date().isoformat(),self.now.isoformat())
         self.assertEqual(len(self.calls),1)
         self.assertIn('部分',result.message)
+
+    def test_enable_ai_during_public_only_run_stops_before_next_module(self):
+        self.store.save_search_enabled(False)
+        def factory():
+            engine=self.engine();original=engine.run
+            def run(scope,**kwargs):
+                result=original(scope,**kwargs);self.store.save_search_enabled(True);return result
+            engine.run=run;return engine
+        jobs=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,factory,now=lambda:self.now)
+        result=jobs.refresh(self.now.date().isoformat(),self.now.isoformat())
+        self.assertEqual(len(self.calls),1)
+        self.assertNotEqual(result.status,'ok')

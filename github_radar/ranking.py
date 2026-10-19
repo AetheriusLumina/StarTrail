@@ -96,13 +96,10 @@ def select_growth_slots(repos: list[Repository], daily: dict[int, StarDay],
         if pick.repo.id in reserved_ids:
             continue
         if pick.repo.id in seen_ids:
-            if rank <= 5:
-                slots.append(GrowthSlot(pick, rank, "old"))
+            slots.append(GrowthSlot(pick, rank, "old"))
         elif new_count < 5:
             slots.append(GrowthSlot(pick, rank, "new"))
             new_count += 1
-        if rank >= 5 and new_count >= 5:
-            break
     return slots
 
 

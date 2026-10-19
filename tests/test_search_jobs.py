@@ -83,8 +83,22 @@ class SearchJobsTests(unittest.TestCase):
         SearchStore(self.store).claim_run(scope,'other',namespace='refresh',now=self.now.timestamp())
         result=jobs.refresh(scope.local_date,self.now.isoformat())
         self.assertEqual(self.calls,[]);self.assertIn('进行',result.message)
-    def test_disconnected_does_not_call_ai_or_fake_success(self):
+    def test_disconnected_uses_modern_public_search_without_selecting_ai_model(self):
+        def forbidden():raise AssertionError('offline refresh must not select a Codex model')
+        engines=[]
+        def factory():
+            engine=self.engine();engines.append(engine);return engine
         service=RadarService(SimpleNamespace(),self.store)
-        jobs=SearchJobs(service,self.store,self.engine,ready=lambda:False,now=lambda:self.now)
-        self.assertIsNone(jobs.refresh(self.now.date().isoformat(),self.now.isoformat()))
-        self.assertEqual(self.calls,[])
+        jobs=SearchJobs(service,self.store,factory,ready=lambda:False,model=forbidden,now=lambda:self.now)
+        result=jobs.refresh(self.now.date().isoformat(),self.now.isoformat())
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status,'ok')
+        self.assertEqual(len(self.calls),3)
+        self.assertTrue(all(e.allow_ai_expansion is False for e in engines))
+
+    def test_readiness_error_does_not_prevent_public_search(self):
+        def unavailable():raise OSError('Codex unavailable')
+        jobs=SearchJobs(RadarService(SimpleNamespace(),self.store),self.store,self.engine,ready=unavailable,now=lambda:self.now)
+        result=jobs.refresh(self.now.date().isoformat(),self.now.isoformat())
+        self.assertEqual(result.status,'ok')
+        self.assertEqual(len(self.calls),3)

@@ -47,8 +47,9 @@ def auto_update_due(now: datetime, settings: AutoUpdateSettings,
 def refresh_failure_reason(result) -> str:
     """Keep the first actionable evidence with a bounded user-visible reason."""
     message = result.message or "GitHub 更新失败"
-    notes = [note for note in getattr(result, "notes", ()) if note and note not in message]
-    return (message + ("；" + "；".join(notes[:3]) if notes else ""))[:900]
+    auxiliary=('实际读取','来源顺序','公开活动样本','主题首批','网站 AI','未找到明确匹配的公开主题','仓库未找到或无访问权限')
+    notes = [note for note in getattr(result, "notes", ()) if note and note not in message and not note.startswith(auxiliary)]
+    return (message + ("；" + "；".join(notes[-3:]) if notes else ""))[:300]
 
 
 def run_scheduled_update(store, service, now: datetime) -> str:

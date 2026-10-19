@@ -330,6 +330,32 @@ class LocalDiscoveryTests(unittest.TestCase):
   self.assertEqual(p.status,'done',p.notes);self.assertEqual(p.judgment_calls,0)
   self.assertEqual([r.repo_id for r in self.store.daily_recommendations(self.scope.local_date)],[250,249,248,247,246])
   self.assertEqual(p.ai_seconds,3);self.assertEqual(p.elapsed_seconds,3);self.assertEqual(self.calls,['expand'])
+ def test_no_codex_reuses_cached_expansion_or_original_keyword_without_ai(self):
+  for cached in (False,True):
+   with self.subTest(cached=cached):
+    engine=self.engine(6);engine.allow_ai_expansion=False
+    expansion=QueryExpansion('skills',('agent skills',),(),'1')
+    if cached:engine.search.save_expansion(self.scope,expansion)
+    received=[];original=engine.sources.collect
+    def collect(scope,value,*args):received.append(value);return original(scope,value,*args)
+    engine.sources.collect=collect
+    p=engine.run(self.scope)
+    self.assertEqual(p.status,'done',p.notes)
+    self.assertEqual(received,[expansion if cached else None])
+    self.assertEqual(self.calls,[])
+    self.assertEqual(p.ai_seconds,0)
+    self.assertEqual(len(self.store.daily_recommendations(self.scope.local_date)),5)
+
+ def test_optional_ai_expansion_failure_still_publishes_verified_original_matches(self):
+  from github_radar.ai_provider import AIOutputError
+  engine=self.engine(6)
+  def unavailable(*args,**kw):raise AIOutputError('Codex response timed out')
+  engine.provider.expand_keyword=unavailable
+  p=engine.run(self.scope)
+  self.assertEqual(p.status,'done',p.notes)
+  self.assertFalse(p.failed)
+  self.assertEqual(len(self.store.daily_recommendations(self.scope.local_date)),5)
+
  def test_keyword_expansion_uses_directly_fetched_topic_directory(self):
   engine=self.engine(4);calls=[]
   engine.sources.trendshift=SimpleNamespace(topics=lambda:('ai skills','ai agent'))
@@ -450,6 +476,40 @@ class LocalJobsTests(unittest.TestCase):
   self.assertEqual(len([r for r in rows if r.section=='growth']),5)
   self.assertEqual(len([r for r in rows if r.section=='keyword']),5)
   self.assertEqual((result.elapsed_seconds,result.ai_seconds),(3,3))
+ def test_disconnected_atomic_refresh_publishes_both_boards_without_ai(self):
+  jobs=self.jobs();jobs.ready=lambda:False
+  self.store.save_ai_model('model')
+  def forbidden():raise AssertionError('must not select an unavailable AI model')
+  jobs.model=forbidden
+  result=jobs.refresh(self.scope.local_date,self.now.isoformat())
+  self.assertEqual(result.status,'ok',result.notes)
+  self.assertEqual(self.calls,[])
+  self.assertEqual(result.ai_seconds,0)
+  rows=self.store.daily_recommendations(self.scope.local_date)
+  self.assertEqual({r.section for r in rows},{'growth','keyword'})
+  self.assertEqual(len(rows),10)
+
+ def test_auto_model_public_refresh_works_offline_and_with_ai_disabled(self):
+  for active,enabled in ((None,True),('model',True),('model',False)):
+   with self.subTest(active=active,enabled=enabled):
+    self.setUp();self.store.save_ai_model(None)
+    if active:self.store.save_ai_active_model(active)
+    self.store.save_search_enabled(enabled)
+    jobs=self.jobs();jobs.ready=lambda:False
+    result=jobs.refresh(self.scope.local_date,self.now.isoformat())
+    self.assertEqual(result.status,'ok',result.notes)
+    self.assertEqual({r.section for r in self.store.daily_recommendations(self.scope.local_date)},{'growth','keyword'})
+    self.assertEqual(self.calls,[])
+
+ def test_disconnected_real_source_failure_retains_previous_complete_issue(self):
+  self.assertEqual(self.jobs().refresh(self.scope.local_date,self.now.isoformat()).status,'ok')
+  before=self.store.daily_recommendations(self.scope.local_date)
+  jobs=self.jobs(True);jobs.ready=lambda:False
+  result=jobs.refresh(self.scope.local_date,self.now.isoformat())
+  self.assertEqual(result.status,'error',result.notes)
+  self.assertNotIn('额度范围更新成功',result.message)
+  self.assertEqual(self.store.daily_recommendations(self.scope.local_date),before)
+
  def test_second_board_failure_rolls_back_issue_and_persists_first_board_pause(self):
   self.assertEqual(self.jobs().refresh(self.scope.local_date,self.now.isoformat()).status,'ok')
   before=self.store.daily_recommendations(self.scope.local_date)

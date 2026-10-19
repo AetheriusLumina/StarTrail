@@ -26,6 +26,27 @@ class SearchPublicationTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.search.publish(self.publication(a),a,now=self.now)
         self.assertEqual(self.store.daily_recommendations(self.day),[])
 
+    def test_atomic_publish_rejects_changed_model_selection_even_when_auto_resolves_same_model(self):
+        self.scope=replace(self.scope,model_id='model')
+        for initial,changed in (('model',None),(None,'model')):
+            with self.subTest(initial=initial,changed=changed):
+                self.store.save_ai_model(initial)
+                lease=self.search.claim_run(self.scope,'owner',now=self.now.timestamp())
+                self.store.save_ai_model(changed)
+                with self.assertRaisesRegex(ValueError,'模型已变化'):
+                    self.search.publish_all((self.publication(lease),),(lease,),now=self.now,expected_model_selection=initial or 'auto')
+                self.assertEqual(self.store.daily_recommendations(self.day),[])
+                self.search.finish_run(lease)
+
+    def test_single_module_publish_still_rejects_explicit_model_changed_to_auto(self):
+        self.scope=replace(self.scope,model_id='model')
+        self.store.save_ai_model('model')
+        lease=self.search.claim_run(self.scope,'owner',now=self.now.timestamp())
+        self.store.save_ai_model(None)
+        with self.assertRaisesRegex(ValueError,'模型已变化'):
+            self.search.publish(self.publication(lease),lease,now=self.now)
+        self.assertEqual(self.store.daily_recommendations(self.day),[])
+
     def test_concurrent_owner_reuses_lease_and_has_no_write_right(self):
         a=self.search.claim_run(self.scope,'owner-a',now=self.now.timestamp())
         b=self.search.claim_run(self.scope,'owner-b',now=self.now.timestamp())

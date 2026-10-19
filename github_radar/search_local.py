@@ -74,7 +74,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
         expansion=None
         if scope.section=='keyword':
             expansion=e.search.load_expansion(scope)
-            if expansion is None and not prepare_only and not (budget.quota_event is not None and budget.quota_event.is_set()):
+            if expansion is None and getattr(e,'allow_ai_expansion',True) and not prepare_only and not (budget.quota_event is not None and budget.quota_event.is_set()):
                 tick(expansion_calls=p.expansion_calls+1)
                 try:
                     # Read the site's actual directory; AI chooses only valid topics.
@@ -84,7 +84,7 @@ def local_steps(engine,scope,*,continue_search=False,cancel_event=None,on_progre
                         adapter.budget=budget;adapter.clock=e.clock
                         directory=adapter.topics()
                     expansion=yield from ai_steps(e.provider.expand_keyword,scope.term,scope.model_id,directory,timeout=timeout());e.search.save_expansion(scope,expansion)
-                except AIOutputError as exc:tick(limited=True,notes=(*p.notes,'AI 扩词未完成，保留原词：'+str(exc)[:200]))
+                except AIOutputError as exc:tick(notes=('AI 扩词未完成，保留原词：'+str(exc)[:200],))
             if expansion:scope=replace(scope,expansion_hash=_digest(asdict(expansion)))
         e.search.import_candidates(scope)
         # Fixed public sources are fetched directly. AI only expands keywords;

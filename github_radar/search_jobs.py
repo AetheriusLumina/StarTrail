@@ -39,11 +39,11 @@ class SearchJobs:
         return True
 
     def _start_heartbeat(self,search,lease):
-        stop=threading.Event()
+        stop=threading.Event();enabled_at_start=self.store.load_search_enabled()
         def heartbeat():
             while not stop.wait(30):
                 try:
-                    if not self.store.load_search_enabled() or not self._renew_leases(search,lease):self.cancel();return
+                    if self.store.load_search_enabled()!=enabled_at_start or not self._renew_leases(search,lease):self.cancel();return
                 except sqlite3.OperationalError as exc:
                     # A transient reader/writer conflict must not silently kill
                     # lease maintenance. Retry next heartbeat within the TTL;
@@ -166,9 +166,20 @@ class SearchJobs:
         return result
 
     def _refresh(self,day,observed_at):
-        if not self.store.load_search_enabled() or not self.ready():return None  # Public GitHub fallback remains available.
+        # AI is an optional keyword expansion step, not the public-search router.
+        enabled_at_start=self.store.load_search_enabled()
+        allow_ai=False
+        model_selection=self.store.load_ai_model() or 'auto'
+        model=self.store.load_ai_model() or self.store.load_ai_active_model()
+        if enabled_at_start:
+            try:
+                allow_ai=bool(self.ready())
+                if allow_ai:model=self.model()
+            except Exception as exc:
+                allow_ai=False
+                logging.getLogger(__name__).warning('Optional Codex preparation unavailable (%s); using saved expansion or original keyword',type(exc).__name__)
         started=self.service.clock()
-        now=self.now();model=self.model()
+        now=self.now()
         scope=SearchScope('growth',None,day,(now.astimezone(timezone.utc).date()-timedelta(days=1)).isoformat(),'',100,model)
         search=SearchStore(self.store)
         lease=search.claim_run(scope,self.owner,namespace='refresh',now=now.timestamp(),ttl=1900)
@@ -183,11 +194,12 @@ class SearchJobs:
             engines=[self.factory() for _ in scopes];iterators=[];latest=[None]*len(scopes);done=[False]*len(scopes)
             from .search_coordinator import SearchCoordinator
             atomic=all(isinstance(engine,SearchCoordinator) and not engine.legacy_review for engine in engines)
-            ai_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='ai-discovery') if atomic else None
+            ai_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='ai-discovery') if atomic and allow_ai else None
             self._engines=engines
             shared_pages={}
             quota_event=threading.Event()
             for engine in engines:
+                engine.allow_ai_expansion=allow_ai
                 engine.quota_event=quota_event
                 if hasattr(engine,'sources'):
                     engine.sources.shared_pages=shared_pages
@@ -212,9 +224,9 @@ class SearchJobs:
                         iterators.append(compatibility())
                 abort=False
                 while not all(done) and not abort:
-                    if self._event.is_set() or not self.store.load_search_enabled():break
+                    if self._event.is_set() or self.store.load_search_enabled()!=enabled_at_start:break
                     for index,(engine,iterator) in enumerate(zip(engines,iterators)):
-                        if self._event.is_set() or not self.store.load_search_enabled():break
+                        if self._event.is_set() or self.store.load_search_enabled()!=enabled_at_start:break
                         if done[index]:continue
                         if not atomic and latest[index] is not None and latest[index].stage=='publishing' and not engine.can_publish():continue
                         self._active=engine
@@ -231,7 +243,7 @@ class SearchJobs:
                     self._renew_leases(search,lease)
                     if any(p and p.ai_started_at and not done[i] for i,p in enumerate(latest)):time.sleep(.05)
                 self.progress=[p for p,complete in zip(latest,done) if p is not None and complete]
-                if atomic and all(done) and all(p is not None and p.status=='ready' for p in latest) and not self._event.is_set() and self.store.load_search_enabled():
+                if atomic and all(done) and all(p is not None and p.status=='ready' for p in latest) and not self._event.is_set() and self.store.load_search_enabled()==enabled_at_start:
                     targets={(module.section,module.keyword_id) for module in scopes}
                     occupied={r.repo_id for r in self.store.daily_recommendations(day) if (r.section,r.keyword_id) not in targets}
                     values=[];leases=[]
@@ -242,7 +254,7 @@ class SearchJobs:
                         occupied.update(r.repo_id for r in picks)
                     try:
                         self.foreground_progress=[replace(p,stage='publishing') for p in self.progress]
-                        search.publish_all(tuple(values),tuple(leases),now=self.now(),cancel_event=self._event,refresh_lease=lease)
+                        search.publish_all(tuple(values),tuple(leases),now=self.now(),cancel_event=self._event,refresh_lease=lease,expected_model_selection=model_selection)
                     except Exception as exc:
                         self.progress=[replace(p,status='paused',stage='stopped',limited=True,notes=(*p.notes,str(exc)[:300])) for p in self.progress]
                     else:self.progress=[replace(p,status='partial' if p.quota_limited else 'done',stage='complete') for p in self.progress]

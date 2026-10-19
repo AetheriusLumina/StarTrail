@@ -47,8 +47,9 @@ class StatDateCorrectionTests(unittest.TestCase):
         self.assertEqual(result.status,'ok')
         self.assertEqual(result.growth_coverage.stat_date,'2026-10-01')
         growth=[r for r in result.recommendations if r.section=='growth']
-        self.assertEqual([r.repo_id for r in growth],[9,8,7,6,5])
-        self.assertEqual([r.rank for r in growth],[2,3,4,5,6], 'Reserved keyword retains its real first rank')
+        self.assertEqual([r.repo_id for r in growth if r.display_role=='new'],[9,8,7,6,5])
+        self.assertEqual([r.repo_id for r in growth if r.display_role=='old'],[1])
+        self.assertEqual([r.rank for r in growth],[2,3,4,5,6,10], 'Reserved keyword retains its real first rank; returning history keeps rank ten')
         self.assertTrue(all(r.metric_date=='2026-10-01' and r.star_delta==100+r.repo_id for r in growth))
         self.assertEqual(keywords,[r for r in result.recommendations if r.section=='keyword'])
         self.assertEqual(old,self.store.daily_recommendations('2026-10-01'))

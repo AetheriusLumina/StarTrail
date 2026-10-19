@@ -162,9 +162,17 @@ class RankingTests(unittest.TestCase):
         daily = {i: StarDay("2026-09-28", 100-i) for i in range(1, 11)}
         old = self.slots(repos, daily, set(range(1, 11)))
         self.assertEqual([(s.rank, s.display_role) for s in old],
-                         [(i, "old") for i in range(1, 6)])
+                         [(i, "old") for i in range(1, 11)])
         self.assertEqual([s.rank for s in self.slots(repos, daily)], list(range(1, 6)))
         self.assertEqual(len(self.slots(repos[:2], daily)), 2)
+
+    def test_returning_projects_after_five_new_are_all_kept_but_archive_only_is_absent(self):
+        repos=[repo(i,1000) for i in range(1,11)]
+        daily={i:StarDay('2026-09-28',100-i) for i in range(1,11)}
+        slots=self.slots(repos,daily,{6,7,8,9,10,999})
+        self.assertEqual([s.pick.repo.id for s in slots if s.display_role=='old'],[6,7,8,9,10])
+        self.assertEqual([s.pick.repo.id for s in slots if s.display_role=='new'],[1,2,3,4,5])
+        self.assertNotIn(999,[s.pick.repo.id for s in slots])
 
     def test_growth_slots_filter_dates_zero_archive_and_stable_ties(self):
         repos = [repo(1, 1000), repo(2, 2000), repo(3, 2000), repo(4, 9999),

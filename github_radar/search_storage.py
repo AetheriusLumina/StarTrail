@@ -303,7 +303,7 @@ class SearchStore:
             db.execute('UPDATE search_runs SET owner=NULL,expires_at=0 WHERE job_id=? AND generation=? AND owner=?',
                 (lease.job_id,lease.generation,lease.owner))
 
-    def publish(self,value,lease,*,now=None,cancel_event=None,_connection=None,_allow_rollover=False):
+    def publish(self,value,lease,*,now=None,cancel_event=None,_connection=None,_allow_rollover=False,_model_selection_validated=False):
         now=now or datetime.now().astimezone();scope=value.scope
         # An active atomic round may cross local midnight. Save to its actual
         # started day, preserving every observation timestamp; never relabel it
@@ -333,7 +333,7 @@ class SearchStore:
             if not row or row['generation']!=lease.generation or row['owner']!=lease.owner or row['expires_at']<=now.timestamp():
                 raise ValueError('任务已被取消或替代，保留当前数据')
             selected=db.execute("SELECT value FROM settings WHERE name='ai_model'").fetchone()
-            if selected and selected[0] and selected[0]!=scope.model_id:
+            if selected and selected[0] and selected[0]!=scope.model_id and not (_model_selection_validated and selected[0]=='auto'):
                 raise ValueError('模型已变化，旧任务不再发布')
             if scope.section=='keyword':
                 if scope.expansion_hash:
@@ -380,13 +380,17 @@ class SearchStore:
                 (now.isoformat(),json.dumps(record,ensure_ascii=False)))
 
 
-    def publish_all(self,values,leases,*,now=None,cancel_event=None,refresh_lease=None):
+    def publish_all(self,values,leases,*,now=None,cancel_event=None,refresh_lease=None,expected_model_selection=None):
         if len(values)!=len(leases) or not values:raise ValueError('榜单整份提交范围无效')
         now=now or datetime.now().astimezone()
         sections={(v.scope.section,v.scope.keyword_id) for v in values}
         if len(sections)!=len(values):raise ValueError('重复榜单范围')
         with closing(self.store._connect()) as db,db:
             db.execute('BEGIN IMMEDIATE')
+            if expected_model_selection is not None:
+                selected=db.execute("SELECT value FROM settings WHERE name='ai_model'").fetchone()
+                if (selected[0] if selected and selected[0] else 'auto')!=expected_model_selection:
+                    raise ValueError('模型已变化，旧任务不再发布')
             if refresh_lease:
                 row=db.execute('SELECT generation,owner,expires_at FROM search_runs WHERE job_id=?',(refresh_lease.job_id,)).fetchone()
                 if not row or row['generation']!=refresh_lease.generation or row['owner']!=refresh_lease.owner or row['expires_at']<=now.timestamp():raise ValueError('整份更新任务已失效')
@@ -396,7 +400,7 @@ class SearchStore:
             # module's validation/disk error restores every old row and ledger.
             for value in values:
                 db.execute('DELETE FROM recommendations WHERE local_date=? AND section=? AND COALESCE(keyword_id,0)=?',(value.scope.local_date,value.scope.section,value.scope.keyword_id or 0))
-            for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db,_allow_rollover=True)
+            for value,lease in zip(values,leases):self.publish(value,lease,now=now,cancel_event=cancel_event,_connection=db,_allow_rollover=True,_model_selection_validated=expected_model_selection is not None)
 
     def growth_frontier(self,scope,*,only_ids=None):
         """Prioritize current trends and previous leaders, then rotate old work.

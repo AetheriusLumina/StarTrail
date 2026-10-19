@@ -21,6 +21,18 @@ class DailyUpdateTests(unittest.TestCase):
         self.data_dir = Path(self.temp.name) / "UserData"
         self.store = RadarStore(self.data_dir)
 
+    def test_failure_summary_keeps_actionable_error_without_source_count_noise(self):
+        result=SimpleNamespace(message='未取得可核实的 GitHub 项目，保留上次结果',notes=(
+            '实际读取 25 个项目；来源顺序与官方新增排名分别保存',
+            '实际读取 12 个项目；来源顺序与官方新增排名分别保存',
+            '未找到明确匹配的公开主题','连接 GitHub 失败，请检查网络'))
+        reason=daily_update.refresh_failure_reason(result)
+        self.assertIn('连接 GitHub 失败',reason)
+        self.assertNotIn('实际读取',reason)
+        self.assertNotIn('公开主题',reason)
+        self.assertLessEqual(len(reason),300)
+        self.assertEqual(len(result.notes),4,'diagnostic evidence must remain intact')
+
     def test_defaults_save_and_reopen(self):
         self.assertEqual(self.store.load_auto_update_settings(),
                          AutoUpdateSettings(True, "09:00"))

@@ -167,7 +167,7 @@ const RADAR_EN = Object.freeze({
   "使用门槛": "Requirements",
   "跳到主要内容": "Skip to main content",
   "展开导航": "Open navigation",
-  "前五中的历史项目": "Returning projects in the top five",
+  "榜单中的历史项目": "Returning projects in this ranking",
   "五个新发现": "Five new discoveries",
   "字号倍率": "Text scale",
   "恢复 1 倍": "Reset to 1×",
