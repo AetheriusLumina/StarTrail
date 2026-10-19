@@ -79,6 +79,8 @@ _EN = {
     "跳到主要内容": "Skip to main content",
     "展开导航": "Open navigation",
     "榜单中的历史项目": "Returning projects in this ranking",
+    "展开全部历史项目": "Expand all returning projects",
+    "收起历史项目": "Collapse returning projects",
     "五个新发现": "Five new discoveries",
     "字号倍率": "Text scale",
     "恢复 1 倍": "Reset to 1×",

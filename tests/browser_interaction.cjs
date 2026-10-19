@@ -647,6 +647,40 @@ async function testCompactReturningGrowthAndSidebar() {
   assert.equal(app.node('nav-history').getAttribute('aria-current'), 'page');
 }
 
+async function testReturningGrowthDisclosureDefaultsToFirstThreeReturningRows() {
+  const app=scenario();await flush();
+  const base={title:'owner/repo',source:'近期 Star 增长',stars:'★ 9000',growth:'+100 Star',description:'Purpose',tags:[]};
+  const old=[2,4,9,12,16].map(rank=>({...base,repo_id:rank,growth_rank:rank,display_role:'old'}));
+  const fresh=[20,21,22,23,24].map(rank=>({...base,repo_id:rank,growth_rank:rank,display_role:'new'}));
+  app.setIssue({updated_at:'2026-10-19T12:00:00Z',sections:[{id:'growth',cards:[...old,...fresh]},{id:'keyword',cards:[]}]});
+  await vm.runInContext('loadIssue()',app.context);
+  const ranks=()=>app.node('growth-returning-cards').children.map(n=>n.querySelectorAll('.card-rank')[0].textContent);
+  assert.deepEqual(ranks(),['2','4','9'],'First three returning projects, regardless of overall rank');
+  const toggle=app.node('growth-returning-toggle');
+  assert.equal(toggle.hidden,false);assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  assert.equal(app.node('growth-cards').children.length,5);
+  const firstFresh=app.node('growth-cards').children[0];
+  await toggle.listeners.get('click')();
+  assert.deepEqual(ranks(),['2','4','9','12','16']);assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  const expandedFirst=app.node('growth-returning-cards').children[0];
+  await vm.runInContext('loadIssue()',app.context);
+  assert.equal(app.node('growth-returning-cards').children.length,5,'Polling must preserve expansion');
+  assert.equal(app.node('growth-returning-cards').children[0],expandedFirst);
+  assert.equal(app.node('growth-cards').children[0],firstFresh,'Disclosure must not rebuild the five new cards');
+  vm.runInContext("language='en'",app.context);await vm.runInContext('loadIssue()',app.context);
+  assert.equal(toggle.getAttribute('aria-label'),'Collapse returning projects');
+  await toggle.listeners.get('click')();assert.equal(app.node('growth-returning-cards').children.length,3);
+  await toggle.listeners.get('click')();
+  app.setIssue({updated_at:'2026-10-19T13:00:00Z'});await vm.runInContext('loadIssue()',app.context);
+  assert.equal(app.node('growth-returning-cards').children.length,3,'A newly saved issue starts collapsed');
+  app.setIssue({sections:[{id:'growth',cards:old.slice(0,2)},{id:'keyword',cards:[]}]});
+  await vm.runInContext('loadIssue()',app.context);assert.equal(toggle.hidden,true);
+  app.setIssue({sections:[{id:'growth',cards:[]},{id:'keyword',cards:[]}]});
+  await vm.runInContext('loadIssue()',app.context);assert.equal(app.node('growth-returning').hidden,true);
+  const html=fs.readFileSync(path.join(__dirname,'../github_radar/web_assets/index.html'),'utf8');
+  assert.match(html,/<button[^>]*id="growth-returning-toggle"[^>]*type="button"[^>]*aria-controls="growth-returning-cards"/);
+}
+
 async function testQuotaScopeRemainsVisibleAfterReload() {
   const app=scenario();await flush();
   app.setIssue({updated_at:'2026-10-08T10:00:00Z',refresh_timing:{status:'ok',quota_scoped:true,published_at:'2026-10-08T10:00:00Z',attempted_at:'2026-10-08T10:00:01Z'},search_progress:[{section:'growth',status:'partial',stage:'complete',quota_limited:true,started_at:'2026-10-08T09:58:00Z',elapsed_seconds:20,collected:6000,candidate_pool:15000,official_checked:4990,pending:4010,metadata_pending:12,cache_hits:0}]});
@@ -1144,6 +1178,7 @@ async function testMainPageTransitionsAndSavedKeywordSwitch(){
   await testReadmeRenderingSafetyAndNavigationRace();
   await testSixFactsAndFullReadmeTables();
   await testCompactReturningGrowthAndSidebar();
+  await testReturningGrowthDisclosureDefaultsToFirstThreeReturningRows();
   await testUpdatePollingPreservesTranslatedGrowthNodes();
   await testQuotaScopeRemainsVisibleAfterReload();
   await testContinuousFontPreviewAndSerializedSave();

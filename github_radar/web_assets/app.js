@@ -9,6 +9,7 @@ if (fragment.has("token")) {
 const token = sessionStorage.getItem(tokenKey);
 const byId = (id) => document.getElementById(id);
 let latestIssue = null;
+let returningExpanded=false,returningIssueKey=null;
 let homeScroll = 0;
 let pollTimer = null;
 let savedIssueTimer = null;
@@ -628,6 +629,21 @@ function compactFailureReason(reason) {
   return localizeServerText((important||parts[0]||reason||'').slice(0,180));
 }
 
+function renderReturningGrowth(issue) {
+  const key=JSON.stringify([issue.local_date,issue.updated_at]);
+  if(key!==returningIssueKey){returningExpanded=false;returningIssueKey=key;}
+  const cards=(issue.sections.find(section=>section.id==='growth')?.cards||[]).filter(card=>card.display_role==='old');
+  if(cards.length<=3)returningExpanded=false;
+  byId('growth-returning').hidden=!cards.length;
+  const toggle=byId('growth-returning-toggle');
+  toggle.hidden=cards.length<=3;
+  toggle.setAttribute('aria-expanded',String(returningExpanded));
+  const label=tr(returningExpanded?'收起历史项目':'展开全部历史项目');
+  toggle.setAttribute('aria-label',label);toggle.title=label;
+  byId('growth-returning-arrow').textContent=returningExpanded?'▴':'▾';
+  renderProjectList(byId('growth-returning-cards'),returningExpanded?cards:cards.slice(0,3));
+}
+
 function renderIssue(issue) {
   latestIssue = issue;
   if(!issue.busy&&issue.update_failure)softwareUpdates?.notifyFailure({...issue.update_failure,reason:compactFailureReason(issue.update_failure.reason)});
@@ -647,14 +663,12 @@ function renderIssue(issue) {
   byId("keyword-list").textContent = issue.keywords.length
     ? issue.keywords.map((item) => item.term).join(language === "en" ? ", " : "、") : tr("暂无");
   const projectCount = (n) => language === "en" ? `${n} ${n === 1 ? "project" : "projects"}` : `${n} 个项目`;
-  const returning = growth.cards.filter(card => card.display_role === "old");
   const discoveries = growth.cards.filter(card => card.display_role !== "old");
   byId("growth-count").textContent = projectCount(discoveries.length);
   byId("keyword-count").textContent = projectCount(keyword.cards.length);
   byId("growth-explainer").textContent = describeGrowth(issue.coverage, growth.cards);
   byId("coverage-line").textContent = describeCoverage(issue.coverage);
-  byId("growth-returning").hidden = !returning.length;
-  renderProjectList(byId("growth-returning-cards"),returning);
+  renderReturningGrowth(issue);
   renderCards({cards: discoveries}, "growth-cards", "growth-empty",
     tr(busy ? "正在寻找新项目，已保存的结果会继续显示在这里。" : "暂时没有符合条件的增长项目。可以点击“立即更新”。"));
   renderKeywordGroups(issue);
@@ -1414,6 +1428,8 @@ async function showDetail(repoId,{preserveFolders=false}={}) {
 }
 
 function showHome() {
+  returningExpanded=false;
+  if(latestIssue)renderReturningGrowth(latestIssue);
   byId("detail-tools").hidden=true;
   cancelReadmePolling();
   detailRepoId = null;
@@ -1605,6 +1621,11 @@ byId("font-scale").addEventListener("keydown", event => {
 byId("font-reset").addEventListener("click", () => commitFontScale(1));
 byId('motion-preference').addEventListener('change', changeMotionPreference);
 if (systemMotion.addEventListener) systemMotion.addEventListener('change', applyMotionPreference);
+byId('growth-returning-toggle').addEventListener('click',()=>{
+  if(!latestIssue)return;
+  returningExpanded=!returningExpanded;
+  renderReturningGrowth(latestIssue);
+});
 byId("refresh-button").addEventListener("click", startRefresh);
 byId("keyword-form").addEventListener("submit", addKeyword);
 byId("quit-button").addEventListener("click", quitApp);

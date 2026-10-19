@@ -51,9 +51,9 @@ py -3.13 -m venv .venv
 
 应用以 `__main__.py` 启动，`browser_launcher.py` 打开默认浏览器，`browser_server.py` 在回环地址提供页面和 API。静态界面用原生 HTML/CSS/JavaScript；个人状态进入 `storage.py` 管理的 SQLite 与配置。服务层协调业务，来源层处理 GitHub/公开页面请求，展示层组合可阅读的数据。没有公网后台或项目自建账号服务。
 
-当前自动AI发现连接路径：`search_jobs.py` → `search_coordinator.py` / `search_local.py` → `search_sources.py` 多来源发现与 `github_client.py` 官方事实 → `search_ranking.py` 排序 → `storage.py` 两榜原子保存 → `project_translation.py` 入选项目预译。未连接或关闭自动AI的兼容路径为 `daily_update.py` / `service.py` → `discovery.py` → `ranking.py`。来源失败与预算停止需要保存可恢复状态，不能把未核实数字当成有效增长。手动与定时更新共享锁；并发点击复用活动任务。
+当前本机更新路径（无论Codex就绪或自动AI开关状态）：`search_jobs.py` → `search_coordinator.py` / `search_local.py` → `search_sources.py` 多来源发现与 `github_client.py` 官方事实 → `search_ranking.py` 排序 → `storage.py` 两榜原子保存 → `project_translation.py` 入选项目预译。`daily_update.py` / `service.py` 仍负责兼容服务入口，但不能因Codex不可用或自动AI关闭而绕过现代Coordinator退回旧发现流程；关键词可复用保存扩词或原词。来源失败与预算停止需要保存可恢复状态，不能把未核实数字当成有效增长。手动与定时更新共享锁；并发点击复用活动任务。
 
-阅读已保存的分类、日期或关注项目不等于再次更新。README 由 `readme_service.py` 获取并缓存；翻译由 `translation_service.py` 管理缓存与单任务进程，`translation_worker.py` 负责 CPU 推理。详情准备需要的译文后再展示，避免结束动效后替换文字。已连接 Codex 的数据更新通过 `search_jobs.py` / `search_coordinator.py` 关键词扩词、直接公开检索和依据匹配；项目六卡解释仍由用户手动触发。结构化结果保存后再进行本地翻译。
+阅读已保存的分类、日期或关注项目不等于再次更新。README 由 `readme_service.py` 获取并缓存；翻译由 `translation_service.py` 管理缓存与单任务进程，`translation_worker.py` 负责 CPU 推理。详情准备需要的译文后再展示，避免结束动效后替换文字。数据更新统一通过 `search_jobs.py` / `search_coordinator.py` 直接公开检索和依据匹配，Codex仅在允许且可用时补充关键词扩词；项目六卡解释仍由用户手动触发。结构化结果保存后再进行本地翻译。
 
 前端入口是 `web_assets/app.js`；历史日历、关注文件夹、翻译和真实 DOM 动效分模块。调整布局时复用主题变量，避免给单页重复硬编码尺寸。标题与排名的艺术字体不扩展到所有正文；固定列数与字号放大依赖滚动，不通过加宽侧栏解决。
 
@@ -62,7 +62,7 @@ py -3.13 -m venv .venv
 ## 不能改错的规则
 
 - 增长取最近已结束的完整 **UTC** 统计日；北京时间当天 08:00 才结束昨天 UTC 日。手动更新优先，自动任务关闭时仍可用；并发点击复用任务。
-- 当天有效增长榜单中的全部历史回归项目紧凑显示（不是全历史库），不占新增五个名额；不足五个时如实显示，不假造项目。关键词根据当前真实总 Star 排序、历史排重，不机械展示固定下一段名次。
+- 当天有效增长榜单中的全部历史回归项目保留（不是全历史库），首页默认只创建排序最前的三个历史卡片，倒三角展开全部；轮询保持展开，新保存结果或重新进入首页默认收起，不占新增五个名额；不足五个时如实显示，不假造项目。关键词根据当前真实总 Star 排序、历史排重，不机械展示固定下一段名次。
 - 本地预译只处理已入选项目，单任务、分批、硬盘缓存；内容不变不重译，不自动生成 AI，不翻译全部候选。代码、链接及仓库标识保持原样。
 - 详情六卡为三列两行、等大、内部滚动；历史与关注五列紧凑卡。日期进入独立当天页，搜索禁用/淡出日历。文件夹重命名/删除保留关注；未分类和自建文件夹可拖动，全部关注禁止；详情多分类/创建并归类原子保存。
 - 标题和排名共享艺术字体；森林透明主题、固定侧栏、透明菜单和主题滚动条保持。真实 DOM 渐显最多约 350ms，旧页即时消失；静态关注头部不反复重播。

@@ -470,7 +470,11 @@ h1, h2, p { margin-top: 0; }
 .project-card-compact { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 20px; padding: 10px 16px; }
 .project-card-compact .card-top { flex: 1 1 16rem; align-items: center; }
 .project-card-compact .card-bottom { margin-top: 0; }
-.returning-growth > h3, .discovery-heading { margin: 24px 0 0; font-size: 1.05rem; }
+.discovery-heading { margin: 24px 0 0; font-size: 1.05rem; }
+.returning-growth-heading { display:flex; align-items:center; gap:12px; margin-top:24px; }
+.returning-growth-heading h3 { margin:0; font-size:1.05rem; }
+.returning-growth-toggle { flex:none; width:44px; min-height:44px; padding:0; border:1px solid currentColor; border-radius:50%; background:transparent; color:inherit; font-size:1.2rem; }
+.returning-growth-toggle:hover { background:rgba(255,255,255,.08); }
 .intro h1, .secondary-view h1, .detail-article h1 { font-size: 1.55rem; }
 .section-heading h2, .detail-article h2, .settings-section h2 { font-size: 1.25rem; }
 .card-name { font-size: 1.15rem; }

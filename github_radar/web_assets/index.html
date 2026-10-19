@@ -127,7 +127,10 @@
           <p class="section-count" id="growth-count"></p>
         </div>
         <section id="growth-returning" class="returning-growth" hidden>
-          <h3 data-i18n="榜单中的历史项目">榜单中的历史项目</h3>
+          <div class="returning-growth-heading">
+            <h3 data-i18n="榜单中的历史项目">榜单中的历史项目</h3>
+            <button id="growth-returning-toggle" type="button" aria-controls="growth-returning-cards" aria-expanded="false" aria-label="展开全部历史项目" class="returning-growth-toggle" hidden><span id="growth-returning-arrow" aria-hidden="true">▾</span></button>
+          </div>
           <div id="growth-returning-cards" class="card-grid"></div>
         </section>
         <h3 class="discovery-heading" data-i18n="五个新发现">五个新发现</h3>
