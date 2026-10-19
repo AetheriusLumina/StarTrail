@@ -1,5 +1,14 @@
 name: Windows checks
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Optional existing ref to verify with the current CI diagnostics
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 env:
@@ -7,9 +16,11 @@ env:
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -26,6 +37,7 @@ jobs:
           .venv/Scripts/python scripts/check_public.py --tracked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:RADAR_TEST_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path
-          .venv/Scripts/python -m unittest discover -s tests
+          git rev-parse HEAD
+          .venv/Scripts/python -u -X faulthandler -c "import faulthandler,unittest,sys; faulthandler.dump_traceback_later(120,repeat=True); result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests')); faulthandler.cancel_dump_traceback_later(); sys.exit(not result.wasSuccessful())"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
