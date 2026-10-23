@@ -78,7 +78,7 @@ These are actual usage screenshots. Projects, dates, rankings, and figures refle
 <summary>Search, verification, ranking, and quota rules</summary>
 
 1. Discover through original and expanded queries, paginated GitHub search with date/Star partitions, Trending, Trendshift, and the durable local catalog. Merge by official repository ID and retain provenance; popularity signals or model estimates never replace official numbers.
-2. Validate the latest complete UTC day and sort growth numerically by official new Stars, total Stars, and repository ID. Keep returning top-five entries and five new-discovery slots. The growth board makes no AI calls.
+2. Validate the latest complete UTC day and sort growth numerically by official new Stars, total Stars, and repository ID. Keep the returning-project list and five new-discovery slots. The growth board makes no AI calls.
 3. Match keywords before sorting. Keep the original expression and up to six focused expansions. Repository names, GitHub topics, and explicit source-site categories supply matching evidence. Multiword expressions must match within one name or tag; incidental description or README mentions do not qualify. Apply archive, minimum-Star, and history rules, then sort by authoritative total Stars. A query match is not an AI-reviewed statement of purpose.
 4. Use AI only for keyword expansion; fetch fixed sources directly, without individual or whole-catalog reviews and without bulk README downloads for review. Six-section project understanding remains a separate manual action. Reuse valid expansion. Continuing discovery advances public-source pagination and saved cursors without an additional AI web search.
 5. Reuse evidence across refreshes. Search-page metadata needs no extra lookup; refresh old candidates by stable identity, with up to twenty repositories in each authenticated official metadata batch for both newly discovered and saved candidates. Cache verified counts, including zero, for the same statistical day for six hours before rechecking. Changed dates, content, or rules invalidate corresponding evidence.
@@ -115,6 +115,8 @@ Foreground growth discovery reads recent repositories and public trend feeds whi
 For manual project understanding, I reuse the local README first. Up to 48 KiB, I send its complete text together with the repository and source URLs. Larger, missing, unreadable, or model-context-limited content uses a repository-page fallback: Codex must actually read the public page before explaining it. Only a confirmed model context error permits one additional URL-only attempt; other failures do not trigger repeated AI calls. A failed page read keeps the saved explanation. Reading the README has its own request budget and still honors actual GitHub cooldowns; Codex page reading uses your account allowance. A URL or search snippet alone does not establish that the page was read.
 
 ### 3. Revisit history: dates and combined search
+
+The date archive contains that day's actual new discoveries. With one keyword, a normal day has five growth discoveries and five keyword projects, ten in total. Returning growth entries are excluded from archive counts, date lists, and history searches; their underlying evidence and deduplication records remain saved. Show the actual number when fewer are available, preserving the saved ranks and Star snapshots.
 
 The calendar shows saved project counts. Open a date to read its snapshot, or combine name, saved content, date range, and source filters.
 

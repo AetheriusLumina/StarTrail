@@ -8,6 +8,11 @@ from urllib.parse import parse_qsl
 from calendar import monthrange
 
 
+# Returning growth entries remain saved for the home ranking and deduplication,
+# but the date archive records daily discoveries, not each subsequent return.
+DISCOVERY_HISTORY_SQL = "(rec.section != 'growth' OR COALESCE(rec.display_role, '') != 'old')"
+
+
 def month_bounds(value):
     if not isinstance(value,str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}',value):
         raise ValueError('月份格式应为YYYY-MM')
@@ -66,7 +71,7 @@ def _text_values(value):
 
 def search_rows(connection, filters: HistoryFilters):
     filters.validate()
-    clauses,params=[],[]
+    clauses,params=[DISCOVERY_HISTORY_SQL],[]
     for value,operator in ((filters.from_date,'>='),(filters.to_date,'<=')):
         if value is not None:clauses.append('rec.local_date '+operator+' ?');params.append(value)
     if filters.source=='growth':clauses.append("rec.section='growth'")

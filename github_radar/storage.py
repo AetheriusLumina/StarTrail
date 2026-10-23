@@ -1359,10 +1359,11 @@ class RadarStore:
         return [self._recommendation(row) for row in rows]
 
     def history_dates(self) -> list[tuple[str, int]]:
+        from .history_search import DISCOVERY_HISTORY_SQL
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                "SELECT local_date, COUNT(*) AS item_count FROM recommendations "
-                "GROUP BY local_date ORDER BY local_date DESC"
+                "SELECT rec.local_date, COUNT(*) AS item_count FROM recommendations rec WHERE "
+                + DISCOVERY_HISTORY_SQL + " GROUP BY rec.local_date ORDER BY rec.local_date DESC"
             ).fetchall()
         return [(row["local_date"], row["item_count"]) for row in rows]
 
@@ -1373,11 +1374,12 @@ class RadarStore:
         return [self._recommendation(row) for row in rows]
 
     def history_month(self, month: str) -> list[tuple[str, int]]:
-        from .history_search import month_bounds
+        from .history_search import month_bounds, DISCOVERY_HISTORY_SQL
         start,end=month_bounds(month)
         with closing(self._connect()) as connection:
-            rows=connection.execute('SELECT local_date,COUNT(*) AS item_count FROM recommendations '
-                                    'WHERE local_date>=? AND local_date<=? GROUP BY local_date ORDER BY local_date',
+            rows=connection.execute('SELECT rec.local_date,COUNT(*) AS item_count FROM recommendations rec '
+                                    'WHERE rec.local_date>=? AND rec.local_date<=? AND '+DISCOVERY_HISTORY_SQL+
+                                    ' GROUP BY rec.local_date ORDER BY rec.local_date',
                                     (start,end)).fetchall()
         return [(row['local_date'],row['item_count']) for row in rows]
 

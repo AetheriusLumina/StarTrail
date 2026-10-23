@@ -14,6 +14,31 @@ from tests.test_readme_content import document
 
 
 class HistorySearchTests(unittest.TestCase):
+    def test_history_counts_and_search_only_include_daily_discoveries_without_erasing_returning(self):
+        day='2026-10-19';at=day+'T09:00:00+08:00'
+        repos=[repository(i) for i in range(20,33)]
+        records=[Recommendation(i,day,'growth',None,100,None,at,rank=i-29,
+                    display_role='old',matched_keyword_ids=(self.word.id,)) for i in (30,31,32)]
+        records += [Recommendation(i,day,'growth',None,90,None,at,rank=i-14,
+                        display_role='new') for i in (20,21,22,23,24)]
+        records += [Recommendation(i,day,'keyword',self.word.id,None,None,at)
+                    for i in (25,26,27,28,29)]
+        self.store.commit_daily(day,repos,[],records)
+        self.store.commit_daily('2026-10-20',[repository(32)],[],[
+            Recommendation(32,'2026-10-20','growth',None,20,None,'2026-10-20T09:00:00+08:00',
+                           rank=1,display_role='old')])
+        self.assertEqual(self.store.history_dates(),[(day,10),(self.new,3),(self.old,3)])
+        self.assertEqual(self.store.history_month('2026-10'),[(day,10)])
+        self.assertEqual([r.repo_id for r in self.find(from_date=day,to_date=day)],
+                         [20,21,22,23,24,25,26,27,28,29])
+        self.assertEqual([r.rank for r in self.find(from_date=day,to_date=day,source='growth')],
+                         [6,7,8,9,10])
+        self.assertEqual([r.repo_id for r in self.find(from_date=day,to_date=day,
+                         source=f'keyword:{self.word.id}')],[25,26,27,28,29])
+        self.assertEqual(self.find(q='project-30'),[])
+        self.assertEqual(self.store.daily_recommendations(day),records)
+        self.assertIn(30,self.store.seen_growth_repo_ids('2026-10-21'))
+
     def test_month_index_includes_all_31_days_without_search_pagination(self):
         for day in range(1,32):
             at=f'2026-10-{day:02}T09:00:00+08:00'

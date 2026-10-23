@@ -1058,12 +1058,13 @@ class BrowserServer:
         self._send(handler,200,result)
 
     def _history_payload(self, day: str, filters=None) -> dict:
+        from .history_search import HistoryFilters
         language = self.store.load_preferences()[0]
         records = self.store.daily_recommendations(day)
         ranks = saved_display_ranks(records)
-        if filters is not None:
-            if (filters.from_date and filters.from_date>day) or (filters.to_date and filters.to_date<day):records=[]
-            else:records=self.store.search_history(replace(filters,from_date=day,to_date=day))
+        filters = filters or HistoryFilters()
+        if (filters.from_date and filters.from_date>day) or (filters.to_date and filters.to_date<day):records=[]
+        else:records=self.store.search_history(replace(filters,from_date=day,to_date=day))
         repositories = self.store.repositories_for_ids([item.repo_id for item in records])
         snapshots = self.store.snapshots_on(day, [item.repo_id for item in records])
         rules = self.store.all_keywords()

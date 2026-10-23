@@ -39,6 +39,38 @@ class ReadyConnection:
 
 
 class BrowserServerTests(unittest.TestCase):
+    def test_history_calendar_index_and_day_keep_ten_new_projects_but_home_keeps_returning(self):
+        day=date.today().isoformat();at=day+'T09:00:00+08:00'
+        stat_day=(date.today()-timedelta(days=1)).isoformat()
+        rule=self.store.add_keyword('local ai')
+        repos=[Repository(i,f'owner/discovery-{i}',f'https://github.com/owner/discovery-{i}',
+                          'local ai',(),None,8000,False) for i in range(501,515)]
+        records=[Recommendation(i,day,'growth',None,100,None,at,'github_daily_new',stat_day,rank=rank,display_role='old',
+                                matched_keyword_ids=(rule.id,))
+                 for i,rank in zip((511,512,513,514),(1,3,5,7))]
+        records += [Recommendation(i,day,'growth',None,90,None,at,'github_daily_new',stat_day,rank=rank,display_role='new')
+                    for i,rank in zip((501,502,503,504,505),(2,4,6,8,10))]
+        records += [Recommendation(i,day,'keyword',rule.id,None,None,at) for i in (506,507,508,509,510)]
+        self.store.commit_daily(day,repos,[StarSnapshot(r.id,day,r.stars,at) for r in repos],records,
+                                completed_at=at)
+        index=json.loads(self.get('/api/history')[2])
+        self.assertEqual(index['dates'],[{'date':day,'count':10}])
+        self.assertEqual((index['matched_total'],index['history_total']),(10,10))
+        calendar=json.loads(self.get('/api/history/calendar?month='+day[:7])[2])
+        self.assertEqual(calendar['dates'],[{'date':day,'count':10}])
+        for suffix in ('','?q=discovery'):
+            saved=json.loads(self.get('/api/history/'+day+suffix)[2])
+            self.assertEqual([c['repo_id'] for c in saved['sections'][0]['cards']],[501,502,503,504,505])
+            self.assertEqual([c['growth_rank'] for c in saved['sections'][0]['cards']],[2,4,6,8,10])
+            self.assertEqual([c['repo_id'] for c in saved['sections'][1]['cards']],[506,507,508,509,510])
+        self.assertEqual(json.loads(self.get('/api/history?q=discovery-511')[2])['matched_total'],0)
+        source=json.loads(self.get('/api/history?source=keyword:'+str(rule.id))[2])
+        self.assertEqual(source['matched_total'],5)
+        home=json.loads(self.get('/api/issue')[2])
+        self.assertEqual(len(home['sections'][0]['cards']),9)
+        self.assertEqual(len(self.store.daily_recommendations(day)),14)
+        self.assertEqual(json.loads(self.get('/api/project/511?date='+day)[2])['growth_rank'],1)
+
     def test_installer_launch_stops_preparation_before_opening(self):
         from unittest.mock import patch
         order=[]
