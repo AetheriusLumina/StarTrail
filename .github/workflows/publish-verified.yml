@@ -42,6 +42,12 @@ jobs:
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:BUILD_RUN_ID" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'BUILD_LOOKUP_FAILED' }
           if ($run.path -ne '.github/workflows/build.yml' -or $run.event -ne 'workflow_dispatch' -or $run.conclusion -ne 'success' -or $run.head_sha -ne $ref.object.sha) { throw 'BUILD_PROVENANCE_MISMATCH' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:BUILD_RUN_ID/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'BUILD_JOBS_LOOKUP_FAILED' }
+          $build = @($jobs.jobs | Where-Object { $_.name -eq 'build' -and $_.conclusion -eq 'success' })
+          if ($build.Count -ne 1) { throw 'EXPECTED_SUCCESSFUL_BUILD_JOB' }
+          $publication = @($build[0].steps | Where-Object name -eq 'Publish requested preview release')
+          if ($publication.Count -ne 1 -or $publication[0].conclusion -ne 'skipped') { throw 'EXPECTED_ARTIFACT_ONLY_BUILD_FROM_RUN_REF' }
           $releases = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'RELEASE_LOOKUP_FAILED' }
           $draft = @($releases | Where-Object tag_name -eq $env:RELEASE_TAG)
