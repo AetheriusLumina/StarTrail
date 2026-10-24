@@ -109,6 +109,8 @@ pwsh -File packaging/build.ps1
 
 ## 手动云端构建与发布
 
+本机无法上传时，可先从现有标签运行 `Windows installer`，将 `release_tag` 留空，只生成私有构建产物；下载该产物后完成实际Windows安装、安全中心检查及数据保留验收。随后在草稿说明中写入该安装包的SHA256，再运行 `Publish verified Windows installer`，填写同一标签、成功构建run ID和实测SHA256。该流程校验来源提交、工作流、草稿和两份摘要，直接上传同一份构建产物，不重新构建；不会覆盖已公开版本或已有附件。未完成实装验收不能填写为已验证。
+
 `check.yml` 在普通提交/PR 执行，只读权限。`build.yml` 只允许 `workflow_dispatch`；构建任务具有 `contents: write`，没有推送或 PR 发布入口。
 
 发布步骤：

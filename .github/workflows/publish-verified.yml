@@ -1,0 +1,82 @@
+name: Publish verified Windows installer
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing preview tag with a prepared draft
+        required: true
+        type: string
+      build_run_id:
+        description: Successful Windows installer artifact-only run for that tag
+        required: true
+        type: string
+      verified_sha256:
+        description: SHA256 of the exact installer already tested on Windows
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      VERIFIED_SHA256: ${{ inputs.verified_sha256 }}
+    steps:
+      - name: Verify build provenance and unpublished draft
+        id: provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$') { throw 'INVALID_PREVIEW_TAG' }
+          if ($env:BUILD_RUN_ID -notmatch '^[1-9][0-9]*$') { throw 'INVALID_BUILD_RUN' }
+          if ($env:VERIFIED_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'INVALID_VERIFIED_HASH' }
+          $ref = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $ref.object.type -ne 'commit') { throw 'EXPECTED_EXISTING_COMMIT_TAG' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:BUILD_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'BUILD_LOOKUP_FAILED' }
+          if ($run.path -ne '.github/workflows/build.yml' -or $run.event -ne 'workflow_dispatch' -or $run.conclusion -ne 'success' -or $run.head_sha -ne $ref.object.sha) { throw 'BUILD_PROVENANCE_MISMATCH' }
+          $releases = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'RELEASE_LOOKUP_FAILED' }
+          $draft = @($releases | Where-Object tag_name -eq $env:RELEASE_TAG)
+          if ($draft.Count -ne 1 -or -not $draft[0].draft -or $draft[0].assets.Count -ne 0) { throw 'EXPECTED_EMPTY_UNPUBLISHED_DRAFT' }
+          if (-not $draft[0].body.Contains($env:VERIFIED_SHA256)) { throw 'NOTES_MUST_IDENTIFY_TESTED_HASH' }
+          "release_id=$($draft[0].id)" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+          "source_sha=$($ref.object.sha)" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+      - uses: actions/download-artifact@v4
+        with:
+          name: StarTrail-Windows-x64-preview
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: package
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.provenance.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Verify exact bytes and publish without rebuilding
+        shell: pwsh
+        env:
+          RELEASE_ID: ${{ steps.provenance.outputs.release_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = 'package/StarTrail_Setup.exe'
+          $digest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne $env:VERIFIED_SHA256) { throw 'INSTALLER_DIFFERS_FROM_TESTED_BYTES' }
+          $sums = Get-Content -Raw -LiteralPath 'package/SHA256SUMS.txt'
+          $matches = [regex]::Matches($sums, '(?m)^([0-9a-fA-F]{64})[ \t]+\*?StarTrail_Setup\.exe[ \t]*\r?$')
+          if ($matches.Count -ne 1 -or $matches[0].Groups[1].Value.ToLowerInvariant() -ne $digest) { throw 'CHECKSUM_FILE_MISMATCH' }
+          gh release upload $env:RELEASE_TAG $installer package/SHA256SUMS.txt source/docs/USER_GUIDE.md --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'ATTACHMENT_UPLOAD_FAILED_DRAFT_RETAINED' }
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.draft -or $release.tag_name -ne $env:RELEASE_TAG) { throw 'DRAFT_CHANGED' }
+          $asset = @($release.assets | Where-Object name -eq 'StarTrail_Setup.exe')
+          if ($release.assets.Count -ne 3 -or $asset.Count -ne 1 -or $asset[0].digest -ne "sha256:$digest" -or $asset[0].size -ne (Get-Item -LiteralPath $installer).Length) { throw 'SERVER_ASSET_MISMATCH' }
+          gh release edit $env:RELEASE_TAG --draft=false --prerelease --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'PUBLICATION_FAILED' }
